@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.33.0.
+-- This file has been generated from package.yaml by hpack version 0.34.2.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 97085f1d14f42343127887f439d7e614924be12b9a0bf329b084001ea00766b1
+-- hash: eb5e05481365288ce93a0dde69e91530d371f85560273a38363fc786cc2c3bf2
 
 name:           AgentSim
 version:        0.1.0.0
@@ -27,13 +27,17 @@ source-repository head
 
 library
   exposed-modules:
+      Agent
       Lib
+      Sim
   other-modules:
       Paths_AgentSim
   hs-source-dirs:
       src
   build-depends:
       base >=4.7 && <5
+    , containers
+    , mtl
   default-language: Haskell2010
 
 executable AgentSim-exe
@@ -44,6 +48,8 @@ executable AgentSim-exe
   build-depends:
       AgentSim
     , base >=4.7 && <5
+    , containers
+    , mtl
   if false
     other-modules:
         Paths_AgentSim
@@ -60,4 +66,6 @@ test-suite AgentSim-test
   build-depends:
       AgentSim
     , base >=4.7 && <5
+    , containers
+    , mtl
   default-language: Haskell2010
