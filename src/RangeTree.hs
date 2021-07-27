@@ -56,6 +56,8 @@ type RangeTree d v = BinTree (Pointer v) (Content d v)
 
 type RangeList d v = N.NonEmpty (d,v)
 
+type Block d v = (Int,v,NonEmpty d)
+
 -- | number of nodes in the range tree
 rangeTreeSize :: RangeTree d v -> Int
 rangeTreeSize = elimTree (\ptr _ _ -> treeSize ptr) (const 1)
@@ -69,26 +71,18 @@ sortBuild p = buildIfSorted . N.sortBy (\x1 x2 -> p (snd x1) (snd x2) )
 
 -- | builds a range tree by recursively taking the median of a sorted sequence
 buildIfSorted :: (Eq v) => RangeList d v -> RangeTree d v
-buildIfSorted = unfoldTree makeRangeIfSorted . makeValueBlocks
-  where makeRangeIfSorted = blocks2Node
+buildIfSorted = splitTree2RangeTree . makeSplitTree . makeValueBlocks
 
-type Block d v = (Int,v,NonEmpty d)
+makeSplitTree :: NonEmpty (Block d v) -> BinTree () (v, NonEmpty d)
+makeSplitTree = unfoldTree (either arrangeSingle arrangeSplit .  splitByMedianValue)
+  where arrangeSingle (xs,p) = Left (p,xs)
+        arrangeSplit (lbs,_,rbs) = Right ((), lbs,rbs)
 
--- couldn't the tree be build easier and faster if we first recursively subdivide the ranges and then create the inner nodes bottom up using the makePointer function?
-blocks2Node :: NonEmpty (Block d v) -> Either (Content d v) (Pointer v, NonEmpty (Block d v), NonEmpty (Block d v))
-blocks2Node bs = either makeLeaf makeInner . splitByMedianValue $ bs
-  where makeLeaf (ids,p) = Left $ Content{ uids = ids, pos = p }
-        makeInner (lbs,_,rbs) = Right (Pointer{ leftRange = blockBounds lbs
-                                                      , rightRange = blockBounds rbs
-                                                      , treeSize = blockCumSize bs
-                                                      , treeHeight = -1 }
-                                    , lbs, rbs)
-        blockBounds = (snd3 *** snd3) . (N.head &&& N.last)
-        snd3 (_,x,_) = x
-        blockCumSize = sum . fmap (\(_,_,ids) -> length ids)
-
-                                             
-
+splitTree2RangeTree :: BinTree () (v, NonEmpty d) -> RangeTree d v
+splitTree2RangeTree = drain deducePointer makeContent
+  where deducePointer _ lsub rsub = makeRangeTree $ Right (lsub,rsub)
+        makeContent (p,xs) = makeRangeTree $ Left Content{ uids = xs, pos = p }
+                                           
 splitByMedianValue :: NonEmpty (Block d v) -> Either (NonEmpty d,v) (NonEmpty (Block d v), v, NonEmpty (Block d v))
 splitByMedianValue ((_,p,ids) :| []) = Left (ids,p)
 splitByMedianValue blocks = Right (N.fromList leftBlocks,medianPos,N.fromList rightBlocks)
