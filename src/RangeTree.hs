@@ -2,8 +2,10 @@
 
 module RangeTree
   (
-    -- RangeTree
-    -- , sortBuild, buildIfSorted
+    Range, RangeTree, Pointer(..), Content(..), RangeList
+    , sortBuild, sortBuildO, buildIfSorted
+    , insert, insertO, delete, deleteO, update, updateO
+    , query, queryO
   ) where
 
 -- import Data.Tree
@@ -17,35 +19,7 @@ import Control.Arrow
 import Control.Monad
 import Control.Monad.Writer
 
-data BinTree a b = Branch a (BinTree a b) (BinTree a b) | Leaf b
-
--- | Yields the root of the tree wrapped in either Left (stop, reached the bottom) or Right (keep going)
-root :: BinTree a b -> Either b a
-root (Branch x _ _) = Right x
-root (Leaf y) = Left y
-
-children :: BinTree a b -> Maybe (BinTree a b, BinTree a b)
-children (Branch _ lt rt) = Just (lt, rt)
-children (Leaf _) = Nothing
-
-unfoldTree :: (a -> Either c (b, a, a)) -> a -> BinTree b c
-unfoldTree f = either Leaf (\(x, ol, or) -> Branch x (unfoldTree f ol) (unfoldTree f or)) . f
-
-elimTree :: (a -> BinTree a b -> BinTree a b -> c) -> (b -> c) -> BinTree a b -> c
-elimTree fb _ (Branch x lt rt) = fb x lt rt
-elimTree _ fl (Leaf y) = fl y
-
-mapTree :: (a -> c) -> (b -> d) -> BinTree a b -> BinTree c d
-mapTree fb fl = elimTree (\x lt rt -> Branch (fb x) (mapTree fb fl lt) (mapTree fb fl rt)) (Leaf . fl)
-
-drain :: (a -> c -> c -> c) -> (b -> c) -> BinTree a b -> c
-drain fb fl = elimTree (\x lt rt -> fb x (drain fb fl lt) (drain fb fl rt)) fl
-
-flood :: (a -> b -> (d, a, a)) -> (a -> c -> e) -> a -> BinTree b c -> BinTree d e
-flood fb fl o = elimTree floodBranch (Leaf . fl o)
-  where floodBranch x lt rt = Branch x' (flood fb fl ol lt) (flood fb fl or rt)
-          where (x', ol, or) = fb o x
-
+-- top level types
 type Range v = (v,v)        
 
 data Pointer v = Pointer{ leftRange :: Range v, rightRange :: Range v, treeSize :: Int, treeHeight :: Int }
@@ -56,8 +30,6 @@ type RangeTree d v = BinTree (Pointer v) (Content d v)
 
 type RangeList d v = N.NonEmpty (d,v)
 
-type Block d v = (Int,v,NonEmpty d)
-
 -- | number of nodes in the range tree
 rangeTreeSize :: RangeTree d v -> Int
 rangeTreeSize = elimTree (\ptr _ _ -> treeSize ptr) (const 1)
@@ -65,13 +37,26 @@ rangeTreeSize = elimTree (\ptr _ _ -> treeSize ptr) (const 1)
 makeRangeTree :: Either (Content d v) (RangeTree d v, RangeTree d v) -> RangeTree d v
 makeRangeTree = either Leaf (\(lsub,rsub) -> Branch (makePointer lsub rsub) lsub rsub)
 
+makePointer :: RangeTree d v -> RangeTree d v -> Pointer v
+makePointer lsub rsub = Pointer{ leftRange = lran, rightRange = rran, treeSize = lsiz + rsiz, treeHeight = max lhei rhei }
+  where (lran, lsiz, lhei) = extractFromSub lsub
+        (rran, rsiz, rhei) = extractFromSub rsub
+        extractFromSub (Leaf con) = ((pos con, pos con),1,1)
+        extractFromSub (Branch ptr _ _) = (uniteRange (leftRange ptr) (rightRange ptr), treeSize ptr, treeHeight ptr)
+
 -- | sorts the sequence by the given predicate and builds the range tree
 sortBuild :: (Eq v) => (v -> v -> Ordering) -> N.NonEmpty (d,v) -> RangeTree d v
 sortBuild p = buildIfSorted . N.sortBy (\x1 x2 -> p (snd x1) (snd x2) )
 
+-- | sorts the sequence by the given predicate and builds the range tree
+sortBuildO :: (Ord v) => N.NonEmpty (d,v) -> RangeTree d v
+sortBuildO = sortBuild compare
+
 -- | builds a range tree by recursively taking the median of a sorted sequence
 buildIfSorted :: (Eq v) => RangeList d v -> RangeTree d v
 buildIfSorted = splitTree2RangeTree . makeSplitTree . makeValueBlocks
+
+type Block d v = (Int,v,NonEmpty d)
 
 makeSplitTree :: NonEmpty (Block d v) -> BinTree () (v, NonEmpty d)
 makeSplitTree = unfoldTree (either arrangeSingle arrangeSplit .  splitByMedianValue)
@@ -115,23 +100,11 @@ insert f pair@(x,p) = elimTree chooseSubtree integrateWithLeaf
           where newLeaf = Leaf Content{ uids = x :| [], pos = p }
                 oldLeaf = Leaf con
 
--- | predicate if x is in the inclusive interval [l,r]
-inRange :: (v -> v -> Ordering) -> v -> Range v -> Bool
-inRange p x (l,r) = l `leq` x && x `leq` r
-  where leq y z = let o = p y z in o == EQ || o == LT
+-- | insert a new id-position pair into the range tree
+insertO :: (Ord v) => (d,v) -> RangeTree d v -> RangeTree d v
+insertO = insert compare
 
-makePointer :: RangeTree d v -> RangeTree d v -> Pointer v
-makePointer lsub rsub = Pointer{ leftRange = lran, rightRange = rran, treeSize = lsiz + rsiz, treeHeight = max lhei rhei }
-  where (lran, lsiz, lhei) = extractFromSub lsub
-        (rran, rsiz, rhei) = extractFromSub rsub
-        extractFromSub (Leaf con) = ((pos con, pos con),1,1)
-        extractFromSub (Branch ptr _ _) = (uniteRange (leftRange ptr) (rightRange ptr), treeSize ptr, treeHeight ptr)
-
--- | merge two ranges into a new range assuming the first is left of the second
-uniteRange :: Range v -> Range v -> Range v
-uniteRange lran rran = (fst lran, snd rran)
-
-
+-- | deletes a single element from the tree by UID
 delete :: (v -> v -> Ordering) -> (d,v) -> RangeTree d v -> Maybe (RangeTree d v)
 delete f pair@(x,p) = elimTree chooseSubtree (const Nothing)
   where chooseSubtree ptr lsub rsub
@@ -141,7 +114,71 @@ delete f pair@(x,p) = elimTree chooseSubtree (const Nothing)
         fillIn = elimTree (\_ lsub rsub -> Right (lsub,rsub)) Left
         -- deleting a leaf is always nothing, because the parent's pointer range is tight
 
+-- | deletes a single element from the tree by UID
+deleteO :: (Ord v) => (d,v) -> RangeTree d v -> Maybe (RangeTree d v)
+deleteO = delete compare
+
+-- Range stuff
+-- | predicate if x is in the inclusive interval [l,r]
+inRange :: (v -> v -> Ordering) -> v -> Range v -> Bool
+inRange p x (l,r) = l `leq` x && x `leq` r
+  where leq y z = let o = p y z in o == EQ || o == LT
+
+-- | merge two ranges into a new range assuming the first is left of the second
+uniteRange :: Range v -> Range v -> Range v
+uniteRange lran rran = (fst lran, snd rran)
+
+isOverlap :: (v -> v -> Ordering) -> Range v -> Range v -> Bool
+isOverlap f r1 r2
+  | f (snd r1) (fst r2) == LT = False -- r1 < r2
+  | f (snd r2) (fst r1) == LT = False -- r2 < r1
+  | otherwise = True
+
 -- updates the position of a single element by UID
 update :: (v -> v -> Ordering) -> d -> v -> v -> RangeTree d v -> RangeTree d v
 update f x oldPos newPos = maybe singleton (insert f (x,newPos)) . delete f (x,oldPos)
   where singleton = makeRangeTree $ Left Content{ uids = x :| [], pos = newPos }
+
+-- updates the position of a single element by UID
+updateO :: (Ord v) => d -> v -> v -> RangeTree d v -> RangeTree d v
+updateO = update compare
+
+-- | query all the points that lie inside the range (inclusive)
+query :: (v -> v -> Ordering) -> Range v -> RangeTree d v -> [d]
+query f r = elimTree chooseSubtree (N.toList . uids)
+  where chooseSubtree ptr lsub rsub = extractIfOverlap r (leftRange ptr) lsub ++ extractIfOverlap r (rightRange ptr) rsub
+        extractIfOverlap qran tran sub = if isOverlap f qran tran then query f qran sub else []
+
+queryO :: (Ord v) => Range v -> RangeTree d v -> [d]
+queryO = query compare
+
+
+-- binary tree as helper data structure
+data BinTree a b = Branch a (BinTree a b) (BinTree a b) | Leaf b
+
+-- | Yields the root of the tree wrapped in either Left (stop, reached the bottom) or Right (keep going)
+root :: BinTree a b -> Either b a
+root (Branch x _ _) = Right x
+root (Leaf y) = Left y
+
+children :: BinTree a b -> Maybe (BinTree a b, BinTree a b)
+children (Branch _ lt rt) = Just (lt, rt)
+children (Leaf _) = Nothing
+
+unfoldTree :: (a -> Either c (b, a, a)) -> a -> BinTree b c
+unfoldTree f = either Leaf (\(x, ol, or) -> Branch x (unfoldTree f ol) (unfoldTree f or)) . f
+
+elimTree :: (a -> BinTree a b -> BinTree a b -> c) -> (b -> c) -> BinTree a b -> c
+elimTree fb _ (Branch x lt rt) = fb x lt rt
+elimTree _ fl (Leaf y) = fl y
+
+mapTree :: (a -> c) -> (b -> d) -> BinTree a b -> BinTree c d
+mapTree fb fl = elimTree (\x lt rt -> Branch (fb x) (mapTree fb fl lt) (mapTree fb fl rt)) (Leaf . fl)
+
+drain :: (a -> c -> c -> c) -> (b -> c) -> BinTree a b -> c
+drain fb fl = elimTree (\x lt rt -> fb x (drain fb fl lt) (drain fb fl rt)) fl
+
+flood :: (a -> b -> (d, a, a)) -> (a -> c -> e) -> a -> BinTree b c -> BinTree d e
+flood fb fl o = elimTree floodBranch (Leaf . fl o)
+  where floodBranch x lt rt = Branch x' (flood fb fl ol lt) (flood fb fl or rt)
+          where (x', ol, or) = fb o x
