@@ -22,7 +22,7 @@ data BinTree a b = Branch a (BinTree a b) (BinTree a b) | Leaf b
 -- | Yields the root of the tree wrapped in either Left (stop, reached the bottom) or Right (keep going)
 root :: BinTree a b -> Either b a
 root (Branch x _ _) = Right x
-root (Leaf y) = Left y 
+root (Leaf y) = Left y
 
 children :: BinTree a b -> Maybe (BinTree a b, BinTree a b)
 children (Branch _ lt rt) = Just (lt, rt)
@@ -43,38 +43,45 @@ drain fb fl = elimTree (\x lt rt -> fb x (drain fb fl lt) (drain fb fl rt)) fl
 
 flood :: (a -> b -> (d, a, a)) -> (a -> c -> e) -> a -> BinTree b c -> BinTree d e
 flood fb fl o = elimTree floodBranch (Leaf . fl o)
-  where
-    floodBranch x lt rt = Branch x' (flood fb fl ol lt) (flood fb fl or rt)
-      where
-        (x', ol, or) = fb o x
+  where floodBranch x lt rt = Branch x' (flood fb fl ol lt) (flood fb fl or rt)
+          where (x', ol, or) = fb o x
 
-data Pointer v = Pointer{ leftRange :: (v,v), rightRange :: (v,v), size :: Int, height :: Int }
+type Range v = (v,v)        
+
+data Pointer v = Pointer{ leftRange :: Range v, rightRange :: Range v, treeSize :: Int, treeHeight :: Int }
 
 data Content d v = Content{ uids :: NonEmpty d, pos :: v }
 
 type RangeTree d v = BinTree (Pointer v) (Content d v)
 
-type Range d v = N.NonEmpty (d,v)
+type RangeList d v = N.NonEmpty (d,v)
+
+-- | number of nodes in the range tree
+rangeTreeSize :: RangeTree d v -> Int
+rangeTreeSize = elimTree (\ptr _ _ -> treeSize ptr) (const 1)
+
+makeRangeTree :: Either (Content d v) (RangeTree d v, RangeTree d v) -> RangeTree d v
+makeRangeTree = either Leaf (\(lsub,rsub) -> Branch (makePointer lsub rsub) lsub rsub)
 
 -- | sorts the sequence by the given predicate and builds the range tree
 sortBuild :: (Eq v) => (v -> v -> Ordering) -> N.NonEmpty (d,v) -> RangeTree d v
 sortBuild p = buildIfSorted . N.sortBy (\x1 x2 -> p (snd x1) (snd x2) )
 
 -- | builds a range tree by recursively taking the median of a sorted sequence
-buildIfSorted :: (Eq v) => Range d v -> RangeTree d v
+buildIfSorted :: (Eq v) => RangeList d v -> RangeTree d v
 buildIfSorted = unfoldTree makeRangeIfSorted . makeValueBlocks
   where makeRangeIfSorted = blocks2Node
 
 type Block d v = (Int,v,NonEmpty d)
 
+-- couldn't the tree be build easier and faster if we first recursively subdivide the ranges and then create the inner nodes bottom up using the makePointer function?
 blocks2Node :: NonEmpty (Block d v) -> Either (Content d v) (Pointer v, NonEmpty (Block d v), NonEmpty (Block d v))
--- range2Node ((n,p) :| []) = Left Content{ uid=n, pos=p }
 blocks2Node bs = either makeLeaf makeInner . splitByMedianValue $ bs
   where makeLeaf (ids,p) = Left $ Content{ uids = ids, pos = p }
         makeInner (lbs,_,rbs) = Right (Pointer{ leftRange = blockBounds lbs
                                                       , rightRange = blockBounds rbs
-                                                      , size = blockCumSize bs
-                                                      , height = -1 }
+                                                      , treeSize = blockCumSize bs
+                                                      , treeHeight = -1 }
                                     , lbs, rbs)
         blockBounds = (snd3 *** snd3) . (N.head &&& N.last)
         snd3 (_,x,_) = x
@@ -90,27 +97,57 @@ splitByMedianValue blocks = Right (N.fromList leftBlocks,medianPos,N.fromList ri
         (leftBlocks,rightBlocks) = N.splitAt halfBlockSize blocks
 
 -- | produces blocks of same value from a sorted list
-makeValueBlocks :: (Eq v) => Range d v -> NonEmpty (Block d v)
+makeValueBlocks :: (Eq v) => RangeList d v -> NonEmpty (Block d v)
 makeValueBlocks ((n,p) :| tl) = N.fromList . reverse . execWriter . foldM collect iniv $ zip [1 ..] tl
   where iniv = (0,p, n :| [])
         collect (i,p',ids) (j,(n',p''))
           | p' == p'' = return (i,p',n' <| ids)
           | otherwise = tell [(i,p',ids)] >> return (j,p'', n' :| [])                          
 
+-- question: would it be any use to build the tree lazily or does lazy evaluation already take care of this?
+-- | insert a new id-position pair into the range tree
+insert :: (v -> v -> Ordering) -> (d,v) -> RangeTree d v -> RangeTree d v
+insert f pair@(x,p) = elimTree chooseSubtree integrateWithLeaf
+  where chooseSubtree ptr lsub rsub
+          | inRange f p (leftRange ptr) = reassemble (insert f pair lsub) rsub
+          | inRange f p (rightRange ptr) = reassemble lsub (insert f pair rsub)
+          | rangeTreeSize lsub <= rangeTreeSize rsub = reassemble (insert f pair lsub) rsub
+          | otherwise = reassemble lsub (insert f pair rsub)
+        reassemble lsub rsub = Branch (makePointer lsub rsub) lsub rsub
+        integrateWithLeaf  con
+          | f p (pos con) == EQ = Leaf con{ uids = x <| uids con }
+          | f p (pos con) == LT = reassemble newLeaf oldLeaf
+          | otherwise = reassemble oldLeaf newLeaf
+          where newLeaf = Leaf Content{ uids = x :| [], pos = p }
+                oldLeaf = Leaf con
 
-splitByMedian :: N.NonEmpty a -> ([a], a, [a])
-splitByMedian ps = (\(loMid, hi) -> (init loMid, last loMid, hi)) $ N.splitAt medpos ps
-  where medpos = floor $ N.length ps % 2
+-- | predicate if x is in the inclusive interval [l,r]
+inRange :: (v -> v -> Ordering) -> v -> Range v -> Bool
+inRange p x (l,r) = l `leq` x && x `leq` r
+  where leq y z = let o = p y z in o == EQ || o == LT
 
-{- 
-insert :: Ord v => v -> RangeTree v -> RangeTree v -- is it better to assume v is not in Ord at the cost of more parameters?
-insert x t = foldTree chooseSub t
-  where chooseSub (Point x') = if x < x'
-                               then Tree{rootLabel=Stretch x (x, x'), subForest=[Point x']}
-                               else Tree{rootLabel=Stretch x' (x', x), subForest=
+makePointer :: RangeTree d v -> RangeTree d v -> Pointer v
+makePointer lsub rsub = Pointer{ leftRange = lran, rightRange = rran, treeSize = lsiz + rsiz, treeHeight = max lhei rhei }
+  where (lran, lsiz, lhei) = extractFromSub lsub
+        (rran, rsiz, rhei) = extractFromSub rsub
+        extractFromSub (Leaf con) = ((pos con, pos con),1,1)
+        extractFromSub (Branch ptr _ _) = (uniteRange (leftRange ptr) (rightRange ptr), treeSize ptr, treeHeight ptr)
 
--- delete :: v -> RangeTree v -> RangeTree v
+-- | merge two ranges into a new range assuming the first is left of the second
+uniteRange :: Range v -> Range v -> Range v
+uniteRange lran rran = (fst lran, snd rran)
 
 
--- update :: (v -> v) -> RangeTree v -> RangeTree v
--}
+delete :: (v -> v -> Ordering) -> (d,v) -> RangeTree d v -> Maybe (RangeTree d v)
+delete f pair@(x,p) = elimTree chooseSubtree (const Nothing)
+  where chooseSubtree ptr lsub rsub
+          | inRange f p (leftRange ptr) = Just . makeRangeTree . maybe (fillIn rsub) (\lsub' -> Right (lsub',rsub)) $ delete f pair lsub
+          | inRange f p (rightRange ptr) = Just . makeRangeTree . maybe (fillIn lsub) (\rsub' -> Right (lsub,rsub')) $ delete f pair rsub
+          | otherwise = Just . makeRangeTree $ Right (lsub,rsub)
+        fillIn = elimTree (\_ lsub rsub -> Right (lsub,rsub)) Left
+        -- deleting a leaf is always nothing, because the parent's pointer range is tight
+
+-- updates the position of a single element by UID
+update :: (v -> v -> Ordering) -> d -> v -> v -> RangeTree d v -> RangeTree d v
+update f x oldPos newPos = maybe singleton (insert f (x,newPos)) . delete f (x,oldPos)
+  where singleton = makeRangeTree $ Left Content{ uids = x :| [], pos = newPos }
