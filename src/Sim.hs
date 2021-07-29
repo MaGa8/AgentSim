@@ -1,6 +1,7 @@
 module Sim
   (
-
+    Pop, Book, Place, Arena
+  , step
   ) where
 
 -- imports
