@@ -6,7 +6,7 @@ module BinTree
   , drain, flood
   ) where
 
-data BinTree a b = Branch a (BinTree a b) (BinTree a b) | Leaf b
+data BinTree a b = Branch a (BinTree a b) (BinTree a b) | Leaf b deriving Show
 
 unfoldTree :: (a -> Either c (b, a, a)) -> a -> BinTree b c
 unfoldTree f = either Leaf (\(x, ol, or) -> Branch x (unfoldTree f ol) (unfoldTree f or)) . f
