@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.34.2.
+-- This file has been generated from package.yaml by hpack version 0.34.4.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: eb5e05481365288ce93a0dde69e91530d371f85560273a38363fc786cc2c3bf2
+-- hash: 6cec301f7e65698251f2da144d1fc67c2c71362d9e11a19522065f87258ba0d3
 
 name:           AgentSim
 version:        0.1.0.0
@@ -28,7 +28,10 @@ source-repository head
 library
   exposed-modules:
       Agent
+      BinTree
       Lib
+      MultiRangeTree
+      RangeTree
       Sim
   other-modules:
       Paths_AgentSim
@@ -50,9 +53,6 @@ executable AgentSim-exe
     , base >=4.7 && <5
     , containers
     , mtl
-  if false
-    other-modules:
-        Paths_AgentSim
   default-language: Haskell2010
 
 test-suite AgentSim-test
