@@ -13,22 +13,23 @@ import qualified Data.List as L
 import Data.Bifunctor
 import Data.Maybe
 import Data.Ratio
+import Data.Either
 
 import qualified BinTree as B
 import BinTree(BinTree)
 
 import Control.Applicative
 import Control.Monad(when)
-import Control.Arrow(left,right)
+import Control.Arrow(left,right,(&&&))
 
 type Size = Int
 type Height = Int
 type Range v = (v,v)
 
-type NTree a b = BinTree (a,Nest a b) (Nest a b)
+type NTree a b = BinTree (a,Nest a b) (a,Nest a b)
 
-adaptSub :: Either (BinTree a b) (NTree a b) -> NTree a b
-adaptSub = either (B.Leaf . Flat) id
+rootNTree :: NTree a b -> a
+rootNTree = either fst fst . B.root
 
 -- | Wrapper around binary trees that allow for nesting
 data Nest a b = Flat (BinTree a b) | Nest (NTree a b) deriving Show -- use GADT to ensure that only branches can be nested
@@ -40,21 +41,39 @@ elimNest _ g (Nest t) = g t
 mkNest :: Either (BinTree a b) (NTree a b) -> Nest a b
 mkNest = either Flat Nest
 
-unfoldNest :: forall a b c.
-  (a -> Either a a) ->
-  (a -> (a,Maybe (b,a,a))) ->
-  (a -> Either c (b,a,a)) ->
-  a -> Nest b c
-unfoldNest f g h = either (Flat . B.unfoldTree h) (Nest . B.unfoldTree nestedUnfolding) . f
+unfoldNest :: forall a b c d.
+  -- | decide at root whether to build a Flat (Left) or a Nest (Right)
+  (a -> Either b a) ->
+  -- | for Nest: construct value passed to subtree, build value at node and decide whether to build children
+  (a -> (c,a,Maybe (a,a))) ->
+  -- | for Flat: construct leaf value or construct branch value and values passed to children
+  (b -> Either d (c,b,b)) ->
+  a -> Nest c d
+unfoldNest p fn ff = either (Flat . B.unfoldTree ff) (Nest . B.unfoldTree nestedUnfolding) . p
   where
-    nestedUnfolding :: a -> Either (Nest b c) ((b,Nest b c),a,a)
+    nestedUnfolding :: a -> Either (c,Nest c d) ((c,Nest c d),a,a)
     nestedUnfolding s = let
-      (ns,inner) = g s
-      nst = unfoldNest f g h ns
-      in maybe (Left nst) (\(x,ls,rs) -> Right ((x,nst),ls,rs)) inner
+      (v,ns,inner) = fn s
+      nst = unfoldNest p fn ff ns
+      in maybe (Left (v,nst)) (\(ls,rs) -> Right ((v,nst),ls,rs)) inner
+
+isFlat :: Nest a b -> Bool
+isFlat = elimNest (const True) (const False)
+
+isLeaf :: Nest a b -> Bool
+isLeaf = elimNest B.isLeaf B.isLeaf
+
+fromNest :: Nest a b -> NTree a b
+fromNest (Nest t) = t
+
+fromFlat :: Nest a b -> BinTree a b
+fromFlat (Flat t) = t
 
 root :: Nest a b -> Either b a
-root = elimNest B.root (B.elimTree (\(x,_) _ _ -> Right x) root)
+root = elimNest B.root (B.elimTree (\(x,_) _ _ -> Right x) (\(x,_) -> Right x))
+
+rootU :: Nest a a -> a
+rootU = either id id . root
 
 children :: Nest a b -> Maybe (Nest a b, Nest a b)
 children = elimNest (fmap (bimap Flat Flat) . B.children) (fmap (bimap Nest Nest) . B.children)
@@ -62,58 +81,67 @@ children = elimNest (fmap (bimap Flat Flat) . B.children) (fmap (bimap Nest Nest
 nest :: Nest a b -> Maybe (Nest a b)
 nest = elimNest (const Nothing) (either (const Nothing) (Just . snd) . B.root)
 
-mapNest :: (a -> c) -> (b -> d) -> Nest a b -> Nest c d
-mapNest f g = elimNest (Flat . B.mapTree f g) (Nest . B.mapTree mapNestBranch (mapNest f g))
-  where
-    mapNestBranch = bimap f (mapNest f g)
-
-floodFull :: forall a b c d e. (a -> b -> (d,a,(a,a))) -- ^ at nested branch
+floodFull :: forall a b c d e.
+             (a -> b -> (d,a,(a,a))) -- ^ at nested branch
+          -> (a -> b -> (d,a)) -- ^ at nested leaf
           -> (a -> b -> (d,a,a)) -- ^ at flat branch
           -> (a -> c -> e) -- ^ at flat leaf
           -> a -> Nest b c -> Nest d e
-floodFull fnb ffb ffl s = elimNest (Flat . B.flood ffb ffl s) (Nest . B.flood handleNestBranch handleNestLeaf s)
+floodFull fnb fnl ffb ffl s = elimNest (Flat . B.flood ffb ffl s) (Nest . B.flood handleNestBranch handleNestLeaf s)
   where
     handleNestBranch :: a -> (b,Nest b c) -> ((d,Nest d e),a,a)
-    handleNestBranch s' (x,nst) = let (x',nsts,(ls,rs)) = fnb s' x in ((x',floodFull fnb ffb ffl nsts nst),ls,rs)
-    handleNestLeaf :: a -> Nest b c -> Nest d e
-    handleNestLeaf s' nst = floodFull fnb ffb ffl s' nst
+    handleNestBranch s' (x,nst) = let (x',nsts,(ls,rs)) = fnb s' x in ((x',floodFull fnb fnl ffb ffl nsts nst),ls,rs)
+    handleNestLeaf :: a -> (b,Nest b c) -> (d,Nest d e)
+    handleNestLeaf s' (x,nst) = let (x',nsts) = fnl s' x in (x', floodFull fnb fnl ffb ffl nsts nst)
 
 flood :: (a -> b -> (d,a,(a,a))) -- ^ at any nested node and flat branch ignoring irrelevant output
-          -> (a -> c -> e) -- ^ at flat leaf
-          -> a -> Nest b c -> Nest d e
-flood f = floodFull f (\s x -> let (x',_,(ls,rs)) = f s x in (x',ls,rs))
+      -> (a -> c -> e) -- ^ at flat leaf
+      -> a -> Nest b c -> Nest d e
+flood f = floodFull f (\s x -> let (x',nsts,_) = f s x in (x',nsts)) (\s x -> let (x',_,(ls,rs)) = f s x in (x',ls,rs))
+
+-- variant of flood where the wave to the nested tree and the wave to the subtrees are determined independently
+floodF :: forall a b c d e.
+          (a -> b -> (d,a)) -- ^ produce inner value from wave
+       -> (a -> a) -- ^ wave to nested tree
+       -> (a -> (a,a)) -- ^ wave to subtrees
+       -> (a -> c -> e) -- ^ produce leaf value from wave
+       -> a -> Nest b c -> Nest d e
+floodF fb fnst fsub = floodFull floodNestBranch floodNestLeaf floodFlatBranch
+  where
+    floodNestBranch w v = let (v',w') = fb w v in (v',fnst w',fsub w')
+    floodNestLeaf w v = let (v',w') = fb w v in (v',fnst w')
+    floodFlatBranch w v = let (v',w') = fb w v in uncurry (v',,) $ fsub w'
 
 drainFull :: forall a b c d.
-             (a -> Either c d -> (Either c d,Either c d) -> d) -- ^ eliminate nested branch
+             (a -> Either c d -> (d,d) -> d) -- ^ eliminate nested branch
+          -> (a -> Either c d -> d) -- ^ eliminate nested leaf
           -> (a -> c -> c -> c) -- ^ eliminate flat branch
           -> (b -> c) -- ^ eliminate leaf of flat tree
           -> Nest a b -> Either c d
-drainFull fnb ffb ffl = elimNest (Left . B.drain ffb ffl) (B.drain handleNestBranch (drainFull fnb ffb ffl))
+drainFull fnb fnl ffb ffl = elimNest (Left . B.drain ffb ffl) (Right . B.drain handleNestBranch handleNestLeaf)
   where
-    handleNestBranch :: (a,Nest a b) -> Either c d -> Either c d -> Either c d
-    handleNestBranch (x,nst) cl cr = Right $ fnb x (drainFull fnb ffb ffl nst) (cl,cr)
+    handleNestBranch :: (a,Nest a b) -> d -> d -> d
+    handleNestBranch (x,nst) cl cr = fnb x (drainFull fnb fnl ffb ffl nst) (cl,cr) 
+    handleNestLeaf :: (a,Nest a b) -> d
+    handleNestLeaf (x,nst) = fnl x (drainFull fnb fnl ffb ffl nst)
 
 drain :: forall a b c.
-         (a -> Maybe c -> (c,c) -> c) -- ^ eliminate a nested branch or a flat branch
+         (a -> Maybe c -> Maybe (c,c) -> c) -- ^ eliminate a nested branch, nested leaf or flat branch
       -> (b -> c)  -- ^ eliminate flat leaf
       -> Nest a b -> c
-drain f g = either id id . drainFull fnb ffb g
+drain f g = either id id . drainFull fnb fnl ffb g
   where
-    fnb :: a -> Either c c -> (Either c c,Either c c) -> c
-    fnb x cnst csub = f x (either Just Just cnst) (bimap (either id id) (either id id) csub)
+    fnb :: a -> Either c c -> (c,c) -> c
+    fnb x cnst csub = f x (either Just Just cnst) (Just csub)
+    fnl :: a -> Either c c -> c
+    fnl x cnst = f x (either Just Just cnst) Nothing
     ffb :: a -> c -> c -> c
-    ffb x cl cr = f x Nothing (cl,cr)
+    ffb x cl cr = f x Nothing $ Just (cl,cr)
 
-truncFull :: forall a b. 
-             (a -> Bool) -- ^ if true transform nested branch into leaf
-          -> (a -> Maybe b) -- ^ decide whether to transform flat branch into leaf
-          -> Nest a b -> Nest a b
-truncFull f g = either Flat Nest . drainFull handleNestBranch handleFlatBranch B.Leaf
+mapNest :: (a -> c) -> (b -> d) -> Nest a b -> Nest c d
+mapNest f g = elimNest (Flat . B.mapTree f g) (Nest . B.mapTree mapNestBranch (bimap f (mapNest f g)))
   where
-    handleNestBranch :: a -> Either (BinTree a b) (NTree a b) -> (Either (BinTree a b) (NTree a b),Either (BinTree a b) (NTree a b)) -> NTree a b
-    handleNestBranch x nt (l,r) = if f x then B.Leaf $ mkNest nt else B.Branch (x,mkNest nt) (adaptSub l) (adaptSub r)
-    handleFlatBranch :: a -> BinTree a b -> BinTree a b -> BinTree a b
-    handleFlatBranch x l r = maybe (B.Branch x l r) B.Leaf $ g x
+    mapNestBranch = bimap f (mapNest f g)   
 
 type PadShow = String -> IO ()
 
@@ -124,19 +152,20 @@ labelNestLevels = flood labelBranch labelLeaf 0
     labelLeaf n x = (x,n)
 
 prettyPrintNest :: forall a b. (Show a,Show b) => Maybe Int -> Nest a b -> IO ()
-prettyPrintNest maxd = either ($ "") ($ "") . drainFull printNest printFlatBranch printFlatLeaf . labelNestLevels
+prettyPrintNest maxd = either ($ "") ($ "") . drainFull printNestBranch printNestLeaf printFlatBranch printFlatLeaf . labelNestLevels
   where
     printValuePadded x pad = putStrLn $ pad ++ show x
     -- accumulated value is String -> IO () where String argument is the padding to be applied to every line
-    printNest :: (a,Int) -> Either PadShow PadShow -> (Either PadShow PadShow,Either PadShow PadShow) -> String -> IO ()
-    printNest (x,n) nstio (lio,rio) pad = do
+    printNestBranch :: (a,Int) -> Either PadShow PadShow -> (PadShow,PadShow) -> String -> IO ()
+    printNestBranch (x,n) nstio (lio,rio) pad = do
       printValuePadded x pad
-      -- putStrLn $ pad ++ L.replicate (80 - length pad) '*'
-      when (maybe True (n <) maxd) $ either ($ pad ++ "^^") ($ pad ++ "^^") nstio
-      putStrLn ""
-      -- putStrLn $ pad ++ L.replicate (80 - length pad) '*'      
-      either ($ pad ++ "Nl") ($ pad ++ "Nl") lio
-      either ($ pad ++ "Nr") ($ pad ++ "Nr") rio
+      when (maybe True (n <) maxd) $ either ($ pad ++ "^^") ($ pad ++ "^^") nstio >> putStrLn ""
+      lio $ pad ++ "Nl"
+      rio $ pad ++ "Nr"
+    printNestLeaf :: (a,Int) -> Either PadShow PadShow -> String -> IO ()
+    printNestLeaf (x,n) nstio pad = do
+      printValuePadded x pad
+      when (maybe True (n <) maxd) $ either ($ pad ++ "^^") ($ pad ++ "^^") nstio >> putStrLn ""
     printFlatBranch :: (a,Int) -> PadShow -> PadShow -> String -> IO ()
     printFlatBranch (x,_) lio rio pad = do
       printValuePadded x pad
@@ -144,11 +173,19 @@ prettyPrintNest maxd = either ($ "") ($ "") . drainFull printNest printFlatBranc
       rio (pad ++ "Fr")
     printFlatLeaf :: (b,Int) -> String -> IO ()
     printFlatLeaf (x,_) = printValuePadded x
-      
   
 
 data Pointer a = Pointer{ pointerHeight :: Height, pointerSize :: Size, pointerRange :: (a,a) } deriving Show
-data Content k v = Content{ contentValue :: v, contentKeys :: [k] } deriving Show
+newtype Content k v = Content{ contents :: NonEmpty (k,v) } deriving Show
+
+contentValues :: Content k v -> NonEmpty v
+contentValues = N.map snd . contents
+
+contentKeys :: Content k v -> NonEmpty k
+contentKeys = N.map fst . contents
+
+range :: Either (Content k v) (Pointer v) -> (v,v)
+range = either ((N.head &&& N.last) . contentValues) pointerRange 
 
 type MultiRangeTree k v = Nest (Pointer v) (Content k v)
 
@@ -194,8 +231,8 @@ type ComparatorSeq a = NonEmpty (Comparator a)
 
 organize :: Comparator v -> NonEmpty (k,v) -> Either (Content k v) (NonEmpty (k,v), NonEmpty (k,v))
 organize fcmp xs
-  | null ls = Left Content{ contentValue = snd $ head rs, contentKeys = map fst rs }
-  | null rs = Left Content{ contentValue = snd $ head ls, contentKeys = map fst ls }
+  | null ls = Left . Content $ N.fromList rs
+  | null rs = Left . Content $ N.fromList ls
   | otherwise = Right (N.fromList ls, N.fromList rs)
   where
     (_,ls,rs) = fromJust . partitionByMedian (cmpBySnd fcmp) $ N.toList xs
@@ -203,31 +240,23 @@ organize fcmp xs
 buildMultiRangeTree :: ComparatorSeq v -> NonEmpty (k,v) -> MultiRangeTree k v
 buildMultiRangeTree fs = buildPointers fs . distribute fs
 
--- demo :: MultiRangeTree Int (Int,Int)
-demo :: Nest () (Content Int (Int,Int))
-demo = let
-  mkf f x y = f x `compare` f y
-  ps = N.fromList $ zip [1 ..] [(1,3), (2,5), (7,2), (8,6), (9,9), (5,4)]
-  -- in buildMultiRangeTree (N.fromList [mkf fst,mkf snd]) ps
-  in distribute (N.fromList [mkf fst,mkf snd]) ps
-
 -- distributes points in nested tree by splitting by the median
 distribute :: forall k v. NonEmpty (v -> v -> Ordering) -> NonEmpty (k,v) -> Nest () (Content k v)
 distribute fs xs = unfoldNest decideNesting nestUnfold flatUnfold (fs,xs)
   where
-    decideNesting :: (ComparatorSeq v, NonEmpty (k,v)) -> Either (ComparatorSeq v, NonEmpty (k,v)) (ComparatorSeq v, NonEmpty (k,v))
-    decideNesting a@(fcmp :| [],xs') = Left a
+    decideNesting :: (ComparatorSeq v, NonEmpty (k,v)) -> Either (Comparator v, NonEmpty (k,v)) (ComparatorSeq v, NonEmpty (k,v))
+    decideNesting a@(fcmp :| [],xs') = Left (fcmp,xs')
     decideNesting a = Right a
     nestUnfold :: (ComparatorSeq v,NonEmpty (k,v))
-               -> ((ComparatorSeq v,NonEmpty (k,v)),Maybe ((),(ComparatorSeq v,NonEmpty (k,v)),(ComparatorSeq v,NonEmpty (k,v))))
+               -> ((),(ComparatorSeq v,NonEmpty (k,v)),Maybe ((ComparatorSeq v,NonEmpty (k,v)),(ComparatorSeq v,NonEmpty (k,v))))
     nestUnfold (fs',xs') = let
       nsta = (N.fromList $ N.tail fs',xs')
-      in either (const (nsta,Nothing)) (\(ls,rs) -> (nsta,Just ((),(fs',ls),(fs',rs)))) $ organize (N.head fs') xs'
-    flatUnfold :: (ComparatorSeq v, NonEmpty (k,v))
-               -> Either (Content k v) ((),(ComparatorSeq v,NonEmpty (k,v)),(ComparatorSeq v,NonEmpty (k,v)))
-    flatUnfold (fs',xs') = do
-      (ls,rs) <- organize (N.head fs') xs'
-      return ((),(fs',ls),(fs',rs))
+      in either (const ((),nsta,Nothing)) (\(ls,rs) -> ((),nsta,Just ((fs',ls),(fs',rs)))) $ organize (N.head fs') xs'
+    flatUnfold :: (Comparator v, NonEmpty (k,v))
+               -> Either (Content k v) ((),(Comparator v,NonEmpty (k,v)),(Comparator v,NonEmpty (k,v)))
+    flatUnfold (f,xs') = do
+      (ls,rs) <- organize f xs'
+      return ((),(f,ls),(f,rs))
 
 mergePointers :: Pointer v -> Pointer v -> Pointer v
 mergePointers pl pr = Pointer{ pointerHeight = 1 + max (pointerHeight pl) (pointerHeight pr)
@@ -236,52 +265,86 @@ mergePointers pl pr = Pointer{ pointerHeight = 1 + max (pointerHeight pl) (point
 
 merge2Pointer :: Either (Content k v) (Pointer v) -> Either (Content k v) (Pointer v) -> Pointer v
 merge2Pointer pl pr = mergePointers (toPointer pl) (toPointer pr)
-  where toPointer = either (\con -> Pointer{ pointerHeight = 1, pointerSize = 1, pointerRange = let v = contentValue con in (v,v) } ) id
+  where toPointer = either (\con -> Pointer{ pointerHeight = 1, pointerSize = 1, pointerRange = range $ Left con } ) id
 
 type SRT k v = BinTree (Pointer v) (Content k v) -- simple range tree
 type MRT k v = NTree (Pointer v) (Content k v) -- multi range tree (raw type)
 
+toPointer :: Either (Content k v) (Pointer v) -> Pointer v
+toPointer = either con2ptr id
+  where con2ptr c = Pointer{ pointerRange = let v = snd. N.head $ contents c in (v,v)
+                           , pointerSize = N.length . N.map snd $ contents c
+                           , pointerHeight = 0 }
+
 buildPointers :: forall k v. ComparatorSeq v -> Nest () (Content k v) -> MultiRangeTree k v
-buildPointers (fcmp :| fs) = either Flat Nest . drainFull (const mkNestInner) (const mkFlatInner) mkLeaf
+buildPointers (fcmp :| fs) = either Flat Nest . drainFull (const mkNestInner) (const mkNestLeaf) (const mkFlatInner) mkLeaf
   where
-    mkNestInner :: Either (SRT k v) (MRT k v) -> (Either (SRT k v) (MRT k v),Either (SRT k v) (MRT k v)) -> MRT k v
-    mkNestInner nt (lt,rt) = B.Branch (merge2Pointer (root $ mkNest lt) (root $ mkNest rt),either Flat Nest nt) (adaptSub lt) (adaptSub rt)
+    mkNestInner :: Either (SRT k v) (MRT k v) -> (MRT k v,MRT k v) -> MRT k v
+    mkNestInner nt (lt,rt) = B.Branch (mergePointers (rootNTree lt) (rootNTree rt),either Flat Nest nt) lt rt
+    mkNestLeaf :: Either (SRT k v) (MRT k v) -> MRT k v
+    mkNestLeaf nt = B.Leaf (toPointer $ either B.root (Right . rootNTree) nt, mkNest nt)
     mkFlatInner :: SRT k v -> SRT k v -> SRT k v
     mkFlatInner lt rt = B.Branch (merge2Pointer (B.root lt) (B.root rt)) lt rt
     mkLeaf :: Content k v -> SRT k v
     mkLeaf = B.Leaf
 
-{-
-data Rangerel = Containing | Overlapping | Disjoint deriving (Show, Eq)
+data Answer = Containing | Overlapping | Disjoint deriving (Show, Eq)
 
-contains :: (v -> v -> Ordering) -> (v,v) -> (v,v) -> Bool
-contains fcmp (l1,r1) (l2,r2) = l1 `fcmp` l2 /= GT && r1 `fcmp` r2 /= LT
+elimAnswer :: a -> a -> a -> Answer -> a
+elimAnswer xc _ _ Containing = xc
+elimAnswer _ xo _ Overlapping = xo
+elimAnswer _ _ xd Disjoint = xd
 
-overlap :: (v -> v -> Ordering) -> (v,v) -> (v,v) -> Bool
-overlap fcmp (l1,r1) (l2,r2) = (l1 `fcmp` l2 /= LT && l1 `fcmp` r2 /= GT) || (l2 `fcmp` l1 /= LT && l2 `fcmp` r1 /= GT)
+contains :: Comparator v -> Query v -> Range v -> Bool
+contains fcmp (ql,qr) (rl,rr) = ql `fcmp` rl /= GT && qr `fcmp` rr /= LT
 
-checkRangeRel :: (v -> v -> Ordering) -> (v,v) -> (v,v) -> Rangerel
-checkRangeRel fcmp b1 b2
-  | contains fcmp b1 b2 = Containing
-  | overlap fcmp b1 b2 = Overlapping
+overlap :: Comparator v -> Query v -> Range v -> Bool
+overlap fcmp (ql,qr) (rl,rr) = (ql `fcmp` rl /= LT && ql `fcmp` rr /= GT) || (rl `fcmp` ql /= LT && rl `fcmp` qr /= GT)
+
+-- check how the first range relates to the second range
+checkQuery :: (v -> v -> Ordering) -> Query v -> Range v -> Answer
+checkQuery fcmp q r
+  | contains fcmp q r = Containing
+  | overlap fcmp q r = Overlapping
   | otherwise = Disjoint
 
--- problem at leaf: even though some points are the same for one coordinate they may not be for otherwise
--- -> leaves should contain nested trees too s.t. we can compare the other coordinates at leaves too
--- want: NTree a b = Nest (BinTree (a,NTree a b) (a,NTree a b)) | Flat (BinTree a b) cause it's sufficient to treat nested leaves as interior nodes
-query :: [v -> v -> Ordering] -> (v,v) -> MultiRangeTree k v -> [(k,v)]
-query fs bds = either id id . drain collectNest collectFlat collectLeaf collectLeaf . flood markNest markFlat markLeaf fs
+type Query v = (v,v)
+
+-- check result of query conditioned on earlier answer
+checkSuccQuery :: (v -> v -> Ordering) -> Answer -> Query v -> Range v -> Answer
+checkSuccQuery _ Containing _ _ = Containing
+checkSuccQuery _ Disjoint _ _ = Disjoint
+checkSuccQuery cmp Overlapping q r = checkQuery cmp q r
+
+labelRangeContained :: [v -> v -> Ordering] -> Query v -> MultiRangeTree k v -> Nest (Pointer v,Answer) (Content k v,Bool)
+labelRangeContained fs q = floodF prodB splitNest splitSub prodL (Overlapping,fs)
   where
-    markLeaf [] con = zip (contentKeys con) (repeat $ contentValue con)
-    markLeaf (fcmp : _) con = if overlap fcmp bds (contentValue con,contentValue con) then markLeaf [] con else []
-    markFlat [] _ = (Overlapping,[],[])
-    markFlat fs' ptr = (checkRangeRel (head fs') bds $ pointerRange ptr,fs',fs')
-    markNest [] _ = (Overlapping,[],([],[]))
-    markNest fs' ptr = (checkRangeRel (head fs') bds $ pointerRange ptr,tail fs',(fs',fs'))
-    collectLeaf = id
-    collectFlat Disjoint _ _ = []
-    collectFlat _ ls rs = ls ++ rs
-    collectNest Disjoint _ _ = []
-    collectNest Overlapping _ (ls,rs) = ls ++ rs
-    collectNest Containing ns _ = either id id ns 
--}
+    prodB (_,[]) p = ((p,Containing),(Containing,[]))
+    prodB (a,fs'@(cmp : _)) p = let
+      a' = checkSuccQuery cmp a q $ pointerRange p
+      in ((p,a'),(a',fs'))
+    prodL (_,[]) c = (c,True)
+    prodL (a,cmp : fs') c = (c,checkSuccQuery cmp a q (range $ Left c) == Containing)
+    splitNest (Containing,fs') = maybe (Containing,[]) ((Overlapping,) . snd) $ L.uncons fs'
+    splitNest (a,fs') = maybe (Containing,[]) ((demote4Nest a,) . snd) $ L.uncons fs'
+    demote4Nest = elimAnswer Overlapping Overlapping Disjoint
+    splitSub (a,fs') = ((a,fs'),(a,fs'))
+
+query :: [v -> v -> Ordering] -> Query v -> MultiRangeTree k v -> [(k,v)]
+query fs q = drain collectInner collectLeaf . labelRangeContained fs q
+  where
+    collectInner :: (Pointer v,Answer) -> Maybe [(k,v)] -> Maybe ([(k,v)],[(k,v)]) -> [(k,v)]
+    collectInner (_,Disjoint) _ _ = []
+    -- either nest or subtrees need to be Just values
+    collectInner (_,Containing) nstxs subxs = fromJust $ nstxs <|> fmap (uncurry (++)) subxs
+    collectInner (_,Overlapping) nstxs subxs = fromJust $ fmap (uncurry (++)) subxs <|> nstxs
+    collectLeaf (c,t) = if t then N.toList $ N.zip (contentKeys c) (contentValues c) else []    
+
+-- returns too many results e.g. for query
+-- query fs ((4,5),(9,9)) t
+demoMrt :: (MultiRangeTree Int (Int,Int), [(Int,Int) -> (Int,Int) -> Ordering])
+demoMrt = let
+  ps = [(1,2), (3,4), (9,5), (7,4), (5,5), (8,1)]
+  mkf f x y = f x `compare` f y
+  fs = [mkf fst, mkf snd]
+  in (buildMultiRangeTree (N.fromList fs) (N.fromList . zip [0 ..] $ ps), fs)

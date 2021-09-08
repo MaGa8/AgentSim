@@ -3,6 +3,7 @@ module BinTree
   (
     BinTree(..), elimTree, unfoldTree, mapTree
   , root, children
+  , isLeaf
   , drain, flood
   ) where
 
@@ -24,6 +25,9 @@ root = elimTree (\x _ _ -> Right x) Left
 
 children :: BinTree a b -> Maybe (BinTree a b, BinTree a b)
 children = elimTree (\_ l -> Just . (,) l) (const Nothing)
+
+isLeaf :: BinTree a b -> Bool
+isLeaf = either (const True) (const False) . root
 
 drain :: (a -> c -> c -> c) -> (b -> c) -> BinTree a b -> c
 drain fb fl = elimTree (\x lt rt -> fb x (drain fb fl lt) (drain fb fl rt)) fl
