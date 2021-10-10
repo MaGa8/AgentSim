@@ -4,7 +4,18 @@
 
 module MultiRangeTree
   (
-
+    NonEmpty(..), (<|)
+  , BinTree(..)
+  , Nest(..), NTree    
+  , isFlat, isLeaf, root, roots, children, nest, elimNest
+  , floodFull, flood, floodF, drainFull, drain, echoFull, echo, mapNest
+  , labelNestLevels, prettyPrintNest
+  , MultiRangeTree, Range, Query, Pointer(..), Content(..)
+  , contentValues, contentKeys, range, mapWithLevelKey
+  , Answer(..), elimAnswer
+  , contains, overlap, checkQuery
+  , Comparator, ComparatorSeq
+  , buildMultiRangeTree, query
   ) where
 
 import qualified Data.List.NonEmpty as N
@@ -16,11 +27,13 @@ import Data.Ratio
 import Data.Either
 
 import qualified BinTree as B
-import BinTree(BinTree)
+import BinTree(BinTree(..))
 
 import Control.Applicative
 import Control.Monad(when)
 import Control.Arrow(left,right,(&&&))
+
+import Debug.Trace
 
 type Size = Int
 type Height = Int
@@ -75,6 +88,9 @@ root = elimNest B.root (B.elimTree (\(x,_) _ _ -> Right x) (\(x,_) -> Right x))
 rootU :: Nest a a -> a
 rootU = either id id . root
 
+roots :: Nest a b -> [Either b a]
+roots = drain (\x n _ -> Right x : fromMaybe [] n) (return . Left)
+
 children :: Nest a b -> Maybe (Nest a b, Nest a b)
 children = elimNest (fmap (bimap Flat Flat) . B.children) (fmap (bimap Nest Nest) . B.children)
 
@@ -112,6 +128,20 @@ floodF fb fnst fsub = floodFull floodNestBranch floodNestLeaf floodFlatBranch
     floodNestLeaf w v = let (v',w') = fb w v in (v',fnst w')
     floodFlatBranch w v = let (v',w') = fb w v in uncurry (v',,) $ fsub w'
 
+-- what about a monadic variant of flood?
+-- use case: carry list of comparators; need: access head function and pop the head before recursing into nested tree
+-- Need different monadic environments for nested tree, left and right subtree. Each is tied to the monadic value of the originating node.
+-- Since the monadic value is split we can use the separated interface of floodF
+{-
+floodM :: forall a b c d e m.
+          (a -> b -> m (d,a)) -- ^ produce inner value from wave
+       -> (a -> m a) -- ^ wave to nested tree
+       -> (a -> (m a, m a)) -- ^ wave to subtrees
+       -> (a -> c -> e) -- ^ produce leaf value from wave
+       -> a -> Nest b c -> m (Nest d e)
+floodM fb fnst fsub fl x t = elimNest () () t
+-}
+
 drainFull :: forall a b c d.
              (a -> Either c d -> (d,d) -> d) -- ^ eliminate nested branch
           -> (a -> Either c d -> d) -- ^ eliminate nested leaf
@@ -137,6 +167,31 @@ drain f g = either id id . drainFull fnb fnl ffb g
     fnl x cnst = f x (either Just Just cnst) Nothing
     ffb :: a -> c -> c -> c
     ffb x cl cr = f x Nothing $ Just (cl,cr)
+
+echoFull :: (a -> e -> (e,e) -> (c,e)) -- ^ echo for nested inner node
+         -> (a -> e -> (c,e)) -- ^ echo for nested leaf
+         -> (a -> e -> e -> (c,e)) -- ^ echo for flat inner node
+         -> (b -> (d,e)) -- ^ echo for flat leaf
+         -> Nest a b -> (Nest c d,e)
+echoFull fnb fnl ffb ffl = either id id . drainFull echoNestBranch echoNestLeaf echoFlatBranch echoFlatLeaf
+  where
+    echoNestBranch x nst ((l,el),(r,er)) = let (n,e) = either id id nst
+                                           in first (\x' -> Nest $ Branch (x',n) (fromNest l) (fromNest r)) $ fnb x e (el,er)
+    echoNestLeaf x nst = let (n,e) = either id id nst in first (\x' -> Nest $ Leaf (x',n)) $ fnl x e
+    echoFlatBranch x (l,el) (r,er) = first (\x' -> Flat $ Branch x' (fromFlat l) (fromFlat r)) $ ffb x el er
+    echoFlatLeaf y = first (Flat . Leaf) $ ffl y
+
+-- first combine echo from subtrees then combine echo from nested tree
+echo :: (a -> e -> (c,e)) -- ^ combine value and echo from nested tree
+     -> (a -> e -> e -> (c,e)) -- ^ combine value and echoes from subtrees
+     -> (c -> e -> c -> e -> (c,e)) -- ^ integrate product from nested tree and from subtree subtrees
+     -> (b -> (d,e))
+     -> Nest a b -> (Nest c d, e)
+echo fnest fsub fint = echoFull echoNestBranch fnest fsub
+  where
+    echoNestBranch x en (el,er) = let (nx,ne) = fnest x en
+                                      (sx,se) = fsub x el er
+                                  in fint nx ne sx se
 
 mapNest :: (a -> c) -> (b -> d) -> Nest a b -> Nest c d
 mapNest f g = elimNest (Flat . B.mapTree f g) (Nest . B.mapTree mapNestBranch (bimap f (mapNest f g)))
@@ -185,44 +240,83 @@ contentKeys :: Content k v -> NonEmpty k
 contentKeys = N.map fst . contents
 
 range :: Either (Content k v) (Pointer v) -> (v,v)
-range = either ((N.head &&& N.last) . contentValues) pointerRange 
+range = either ((N.head &&& N.last) . contentValues) pointerRange
 
 type MultiRangeTree k v = Nest (Pointer v) (Content k v)
 
--- partitions by the (lower) median value not counting multiplicities
-partitionByMedian :: (a -> a -> Ordering) -> [a] -> Maybe (a,[a],[a])
-partitionByMedian fcmp xs = makePartition <$> medianOfMedians fcmp n medr 5 xs
+mapWithLevelKey :: (Maybe l -> a -> c) -> (Maybe l -> b -> d) -> [l] -> Nest a b -> Nest c d
+mapWithLevelKey fb fl = floodF mapBranch splitNest (id &&& id) mapLeaf
   where
-    n = length xs
-    medr = floor $ n % 2
-    makePartition med = let (ls,rs) = partitionByPivot fcmp med xs in (med,ls,rs)
+    mapBranch cmps' = (,cmps') . fb (fst <$> L.uncons cmps')
+    splitNest = maybe [] snd . L.uncons 
+    mapLeaf cmps' = fl (fst <$> L.uncons cmps')
 
-partitionByPivot :: (a -> a -> Ordering) -> a -> [a] -> ([a],[a])
-partitionByPivot fcmp p = L.partition ((/= LT) . fcmp p)
+partitionByPivot :: (a -> a -> Ordering) -> a -> [a] -> ([a],[a],[a])
+partitionByPivot fcmp piv = foldl categorize ([],[],[])
+  where
+    categorize (smaller, equal, greater) x = case fcmp piv x of
+      GT -> (x : smaller, equal, greater)
+      EQ -> (smaller, x : equal, greater)
+      LT -> (smaller, equal, x : greater)
 
--- 5 median-of-medians algorithm
-medianOfMedians :: (a -> a -> Ordering) -> Int -> Int -> Int -> [a] -> Maybe a
-medianOfMedians _ _ _ _ [] = Nothing
-medianOfMedians _ _ _ _ [x] = Just x
--- medianOfMedians fcmp _ _ [x,y] = Just $ if fcmp x y == LT then 
-medianOfMedians fcmp n i c xs
-  | n <= c = Just $ L.sortBy fcmp xs !! (i-1)
-  | po == i = Just pivot
-  | po > i = medianOfMedians fcmp (n - nu) i c ls
-  | po < i = medianOfMedians fcmp (n - nl) (i - nl) c us
-  where 
-    pivot = fromJust $ medianOfMedians fcmp n' d c centers
-    columns = groupsOfN c xs
-    centers = map (\xs -> xs !! floor (length xs % 2)) columns
-    n' = ceiling $ n % c
-    d = floor $ n' % 2
-    (ls,us) = partitionByPivot fcmp pivot xs
-    po = sum $ map (\x -> if fcmp pivot x == LT then 0 else 1) xs
-    (nl,nu) = (length ls,length us)
+type Rank = Int -- ^ rank is the number of elements smaller
 
 groupsOfN :: Int -> [a] -> [[a]]
 groupsOfN n xs = g : if null xs' then [] else groupsOfN n xs'
   where (g,xs') = splitAt n xs
+
+-- | chooses the lower middle of the list
+pickMiddle :: [a] -> Maybe a
+pickMiddle [] = Nothing
+pickMiddle xs = helper xs xs
+  where
+    helper (y : _) [_] = Just y
+    helper (y : _) [_,_] = Just y
+    helper (_ : ys) (_ : _ : zs) = helper ys zs
+
+medianRank :: Int -> Int
+medianRank = floor . (% 2) . subtract 1
+
+-- | selects the lower median from the list
+findColMedianWorker :: (a -> a -> Ordering) -> Size -> Size -> [a] -> Maybe a
+findColMedianWorker fcmp nelem chunkSize = medianOfMediansWorker fcmp nelem' (medianRank nelem') chunkSize . map pickColMid . groupsOfN chunkSize 
+  where
+    pickColMid = fromJust . pickMiddle . L.sortBy fcmp
+    nelem' = ceiling $ nelem % chunkSize
+    -- subtract one because it's #elements smaller, pick lower median
+    medRank = floor . (% 2) $ nelem' - 1
+
+-- | select element at index rank as in the median-of-medians algorithm
+-- adapted to also work with duplicate elements
+medianOfMediansWorker :: (a -> a -> Ordering) -- ^ comparator: computes Ordering of the first with respect to the latter
+                -> Int -- ^ number of elements in list
+                -> Int -- ^ rank of the item to select
+                -> Int -- ^ number of elements in a column
+                -> [a] -> Maybe a
+medianOfMediansWorker _ _ _ _ [] = Nothing
+medianOfMediansWorker fcmp nelem rank chunkSize xs
+  | nelem <= chunkSize = Just $ L.sortBy fcmp xs !! rank
+  | pivotLowerRank <= rank && rank <= pivotUpperRank = Just pivot
+  | rank < pivotLowerRank = medianOfMediansWorker fcmp nsmalls rank chunkSize smalls
+  | rank > pivotUpperRank = medianOfMediansWorker fcmp ngreats (rank - nelem + ngreats) chunkSize greats
+  where 
+    pivot = fromJust $ findColMedianWorker fcmp nelem chunkSize xs
+    (smalls, equals, greats) = partitionByPivot fcmp pivot xs 
+    (nsmalls, ngreats) = (length smalls, length greats)
+    (pivotLowerRank, pivotUpperRank) = (nsmalls, nelem - ngreats - 1)
+
+pickMedian :: (a -> a -> Ordering) -> [a] -> Maybe a
+pickMedian fcmp xs = medianOfMediansWorker fcmp (length xs) (medianRank $ length xs) 5 xs
+
+pickAtRank :: (a -> a -> Ordering) -> Rank -> [a] -> Maybe a
+pickAtRank fcmp rank xs = medianOfMediansWorker fcmp (length xs) rank 5 xs
+
+-- partitions list into values smaller or equal and values greater than the lower median 
+partitionByMedian :: (a -> a -> Ordering) -> [a] -> Maybe (a,[a],[a])
+partitionByMedian fcmp xs = makePartition <$> pickMedian fcmp xs
+  where
+    makePartition med = let (smalls, equals, greats) = partitionByPivot fcmp med xs
+                        in (med, smalls ++ equals, greats)
 
 cmpBySnd f (_,x) (_,y) = f x y
 
@@ -265,7 +359,6 @@ mergePointers pl pr = Pointer{ pointerHeight = 1 + max (pointerHeight pl) (point
 
 merge2Pointer :: Either (Content k v) (Pointer v) -> Either (Content k v) (Pointer v) -> Pointer v
 merge2Pointer pl pr = mergePointers (toPointer pl) (toPointer pr)
-  where toPointer = either (\con -> Pointer{ pointerHeight = 1, pointerSize = 1, pointerRange = range $ Left con } ) id
 
 type SRT k v = BinTree (Pointer v) (Content k v) -- simple range tree
 type MRT k v = NTree (Pointer v) (Content k v) -- multi range tree (raw type)
@@ -273,7 +366,7 @@ type MRT k v = NTree (Pointer v) (Content k v) -- multi range tree (raw type)
 toPointer :: Either (Content k v) (Pointer v) -> Pointer v
 toPointer = either con2ptr id
   where con2ptr c = Pointer{ pointerRange = let v = snd. N.head $ contents c in (v,v)
-                           , pointerSize = N.length . N.map snd $ contents c
+                           , pointerSize = N.length $ contents c
                            , pointerHeight = 0 }
 
 buildPointers :: forall k v. ComparatorSeq v -> Nest () (Content k v) -> MultiRangeTree k v
