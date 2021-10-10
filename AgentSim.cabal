@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6cec301f7e65698251f2da144d1fc67c2c71362d9e11a19522065f87258ba0d3
+-- hash: c0ba543cb0992a96a9b024cf064700d0533122f874443987e393948b70b56233
 
 name:           AgentSim
 version:        0.1.0.0
@@ -32,13 +32,15 @@ library
       Lib
       MultiRangeTree
       RangeTree
+      Rank
       Sim
   other-modules:
       Paths_AgentSim
   hs-source-dirs:
       src
   build-depends:
-      base >=4.7 && <5
+      QuickCheck
+    , base >=4.7 && <5
     , containers
     , mtl
   default-language: Haskell2010
@@ -50,6 +52,7 @@ executable AgentSim-exe
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       AgentSim
+    , QuickCheck
     , base >=4.7 && <5
     , containers
     , mtl
@@ -59,12 +62,15 @@ test-suite AgentSim-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      BinTreeTest
+      MultiRangeTreeTest
       Paths_AgentSim
   hs-source-dirs:
       test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       AgentSim
+    , QuickCheck
     , base >=4.7 && <5
     , containers
     , mtl

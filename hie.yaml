@@ -1,8 +1,2 @@
 cradle:
   stack:
-    - path: "./src"
-      component: "AgentSim:lib"
-    - path: "./app"
-      component: "AgentSim:exe:AgentSim"
-    - path: "./test"
-      component: "AgentSim:test:AgentSim-test"
