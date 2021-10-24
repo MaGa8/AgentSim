@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: c0ba543cb0992a96a9b024cf064700d0533122f874443987e393948b70b56233
+-- hash: f47b3b235c0c9ea15273911b454aa623c76daf2a5e1bccc0c230947243ccd4b6
 
 name:           AgentSim
 version:        0.1.0.0
@@ -43,6 +43,7 @@ library
     , base >=4.7 && <5
     , containers
     , mtl
+    , transformers
   default-language: Haskell2010
 
 executable AgentSim-exe
@@ -56,6 +57,7 @@ executable AgentSim-exe
     , base >=4.7 && <5
     , containers
     , mtl
+    , transformers
   default-language: Haskell2010
 
 test-suite AgentSim-test
@@ -74,4 +76,5 @@ test-suite AgentSim-test
     , base >=4.7 && <5
     , containers
     , mtl
+    , transformers
   default-language: Haskell2010
