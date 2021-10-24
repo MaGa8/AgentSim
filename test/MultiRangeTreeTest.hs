@@ -32,8 +32,8 @@ accessors = [fst3, snd3, trd3]
 mk :: (Ord b) => (a -> b) -> a -> a -> Ordering
 mk f p1 p2 = f p1 `compare` f p2
 
-comparators :: [P3 -> P3 -> Ordering]
-comparators = map mk accessors
+comparators3 :: [P3 -> P3 -> Ordering]
+comparators3 = map mk accessors
 
 instance (Arbitrary a) => Arbitrary (N.NonEmpty a) where
   arbitrary = (:|) <$> arbitrary <*> arbitrary
@@ -41,14 +41,14 @@ instance (Arbitrary a) => Arbitrary (N.NonEmpty a) where
 
 type Tree3d = MultiRangeTree Int P3
 type Inst = (Int,P3)
-newtype TestPair = TestPair ([Inst], MultiRangeTree Int P3) deriving Show
+newtype TestPair = TestPair ([Inst], MultiRangeTree Int P3)
 
 -- steps of common test:
 -- (1) build tree from points 
 -- (2) compute with the tree yielding some product
 -- (3) compare the tree against the product
 testTree :: Testable b => (Tree3d -> a) -> ([Inst] -> a -> b) -> N.NonEmpty P3 -> b
-testTree run ver ps = ver (N.toList xs) . run $ buildMultiRangeTree (N.fromList comparators) xs
+testTree run ver ps = ver (N.toList xs) . run $ buildMultiRangeTree (N.fromList comparators3) xs
   where
     xs :: N.NonEmpty Inst
     xs = N.zip (N.fromList [1 ..]) ps
@@ -56,7 +56,7 @@ testTree run ver ps = ver (N.toList xs) . run $ buildMultiRangeTree (N.fromList 
 mkPair4List :: N.NonEmpty P3 -> TestPair
 mkPair4List xs = let
   points = N.zip (N.fromList [1 ..]) xs
-  in TestPair (N.toList points, buildMultiRangeTree (N.fromList comparators) points)
+  in TestPair (N.toList points, buildMultiRangeTree (N.fromList comparators3) points)
 
 instance Arbitrary TestPair where
   arbitrary = mkPair4List <$> ((:|) <$> arbitrary <*> arbitrary)
@@ -71,7 +71,7 @@ halve xs = let mid = floor . (/2) . fromIntegral $ length xs in splitAt mid xs
 
 -- total number of elements is correct
 prop_numberOfElementsTop :: N.NonEmpty P3 -> Bool
-prop_numberOfElementsTop ps = testTree calcRootSizes checkRootSizes ps
+prop_numberOfElementsTop ps = testTree (calcRootSizes . getMultiRangeTree) checkRootSizes ps
   where
     calcRootSizes = map (either (N.length . contents) pointerSize) . roots
     checkRootSizes ps = all (== length ps)
@@ -85,7 +85,7 @@ prop_numberOfElementsTop ps = testTree calcRootSizes checkRootSizes ps
 
 -- number of elements adds up everywhere in the tree
 prop_numberOfElementsRec :: N.NonEmpty P3 -> Bool
-prop_numberOfElementsRec = testTree nodeSizes (\_ -> fst . drain gatherAndCheck prepLeaf)
+prop_numberOfElementsRec = testTree (nodeSizes . getMultiRangeTree) (\_ -> fst . drain gatherAndCheck prepLeaf)
   where
     nodeSizes = mapNest pointerSize (N.length . contents)
     prepLeaf n = (True, n)
@@ -93,7 +93,7 @@ prop_numberOfElementsRec = testTree nodeSizes (\_ -> fst . drain gatherAndCheck 
                                     maybe True (\((lt,leftn), (rt,rightn)) -> lt && rt && n == leftn + rightn) subs
                                 , n)
 
-calcNodeMinMax :: Tree3d -> Nest (Int, Int) (Int, Int)
+calcNodeMinMax :: Nest (Pointer P3) (Content Int P3) -> Nest (Int, Int) (Int, Int)
 calcNodeMinMax = mapWithLevelKey minMaxFromPointer minMaxFromContent accessors
   where
     minMaxFromPointer mf ptr = let f = fromJust mf in bimap f f $ pointerRange ptr
@@ -103,17 +103,18 @@ calcNodeMinMax = mapWithLevelKey minMaxFromPointer minMaxFromContent accessors
 
 -- problem: does not pick up difference in dim 2
 prop_rangesCoverTop :: N.NonEmpty P3 -> Bool
-prop_rangesCoverTop = testTree (map (either id id) . roots . calcNodeMinMax) (\ps minMaxs -> and $ zipWith (==) (dimensionMinMax ps) minMaxs :: Bool)
+prop_rangesCoverTop = testTree (map (either id id) . roots . calcNodeMinMax . getMultiRangeTree) (\ps minMaxs -> and $ zipWith (==) (dimensionMinMax ps) minMaxs :: Bool)
   where
     dimensionMinMax ps = map (\f -> let mapped = map (f . snd) ps in (minimum mapped, maximum mapped)) accessors
 
 -- top-level range is correct
 prop_rangesCoverRec :: N.NonEmpty P3 -> Bool
-prop_rangesCoverRec = testTree (evalCoverage . calcNodeMinMax) (const checkCorrect)
+prop_rangesCoverRec = testTree (evalCoverage . calcNodeMinMax . getMultiRangeTree) (const checkCorrect)
   where
     evalCoverage = fst . newEcho evalBranch (True,)
     evalBranch (l,u) _ subs = maybe (True, (l,u)) (\((ll,lu), (rl,ru)) -> (l == ll && ru == u, (l,u))) subs
 
+{-
 compareWithSubranges :: (Pointer v -> Maybe (Range v) -> Maybe (Range v,Range v) -> a)
                      -> MultiRangeTree k v -> Nest a ()
 compareWithSubranges f = fst . echoFull compareNestBranch compareNestLeaf compareFlatBranch compareFlatLeaf
@@ -131,13 +132,14 @@ collectChildren = fst . echo collectNest collectSub integrate collectLeaf
     collectNest x nv = ((x,Just nv,Nothing),Right x)
     collectSub x lv rv = ((x,Nothing,Just (lv,rv)),Right x)
     integrate (x,nv,_) _ (_,_,sv) _ = ((x,nv,sv),Right x)
+-}
 
 checkCorrect :: Nest Bool Bool -> Bool
 checkCorrect = drain testInner id
   where testInner t nst subs = t && maybe True (uncurry (&&)) subs && fromMaybe True nst
 
 prop_checkRangesDisjoint :: N.NonEmpty P3 -> Bool
-prop_checkRangesDisjoint = testTree (fst . newEcho checkChildren (True,) . calcNodeMinMax) (const checkCorrect)
+prop_checkRangesDisjoint = testTree (fst . newEcho checkChildren (True,) . calcNodeMinMax . getMultiRangeTree) (const checkCorrect)
   where
     checkChildren ran _  = (,ran) . maybe True (\((lmin,lmax), (rmin,rmax)) -> lmax <= rmin)
 

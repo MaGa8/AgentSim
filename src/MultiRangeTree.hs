@@ -12,7 +12,7 @@ module MultiRangeTree
   -- new functions, destined to replace the other zoo
   , newDrain, newEcho
   , labelNestLevels, prettyPrintNest
-  , MultiRangeTree, Range, Query, Pointer(..), Content(..)
+  , MultiRangeTree(..), Range, Query, Pointer(..), Content(..)
   , contentValues, contentKeys, range, mapWithLevelKey
   , Answer(..), elimAnswer
   , contains, overlap, checkQuery
@@ -286,7 +286,7 @@ contentKeys = N.map fst . contents
 range :: Either (Content k v) (Pointer v) -> (v,v)
 range = either ((N.head &&& N.last) . contentValues) pointerRange
 
-type MultiRangeTree k v = Nest (Pointer v) (Content k v)
+data MultiRangeTree k v = MultiRangeTree{ comparators :: ComparatorSeq v, getMultiRangeTree :: Nest (Pointer v) (Content k v) } 
 
 mapWithLevelKey :: (Maybe l -> a -> c) -> (Maybe l -> b -> d) -> [l] -> Nest a b -> Nest c d
 mapWithLevelKey fb fl = floodF mapBranch splitNest (id &&& id) mapLeaf
@@ -347,7 +347,7 @@ toPointer = either con2ptr id
                            , pointerHeight = 0 }
 
 buildPointers :: forall k v. ComparatorSeq v -> Nest () (Content k v) -> MultiRangeTree k v
-buildPointers (fcmp :| fs) = either Flat Nest . drainFull (const mkNestInner) (const mkNestLeaf) (const mkFlatInner) mkLeaf
+buildPointers cmps@(fcmp :| fs) = MultiRangeTree cmps . either Flat Nest . drainFull (const mkNestInner) (const mkNestLeaf) (const mkFlatInner) mkLeaf
   where
     mkNestInner :: Either (SRT k v) (MRT k v) -> (MRT k v,MRT k v) -> MRT k v
     mkNestInner nt (lt,rt) = B.Branch (mergePointers (rootNTree lt) (rootNTree rt),either Flat Nest nt) lt rt
@@ -387,7 +387,7 @@ checkSuccQuery _ Disjoint _ _ = Disjoint
 checkSuccQuery cmp Overlapping q r = checkQuery cmp q r
 
 labelRangeContained :: [v -> v -> Ordering] -> Query v -> MultiRangeTree k v -> Nest (Pointer v,Answer) (Content k v,Bool)
-labelRangeContained fs q = floodF prodB splitNest splitSub prodL (Overlapping,fs)
+labelRangeContained fs q = floodF prodB splitNest splitSub prodL (Overlapping,fs) . getMultiRangeTree
   where
     prodB (_,[]) p = ((p,Containing),(Containing,[]))
     prodB (a,fs'@(cmp : _)) p = let
