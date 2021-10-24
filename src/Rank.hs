@@ -76,4 +76,4 @@ partitionByMedian :: (a -> a -> Ordering) -> [a] -> Maybe (a,[a],[a])
 partitionByMedian fcmp xs = makePartition <$> pickMedian fcmp xs
   where
     makePartition med = let (smalls, equals, greats) = partitionByPivot fcmp med xs
-                        in (med, smalls ++ equals, greats)
+                        in if length smalls <= length greats then (med, equals ++ smalls, greats) else (med, smalls, equals ++ greats)

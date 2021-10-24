@@ -1,2 +1,11 @@
+
+import Test.QuickCheck
+
+import BinTreeTest
+import MultiRangeTreeTest
+
 main :: IO ()
-main = putStrLn "Test suite not yet implemented"
+main = do
+  testBinTree
+  testMultiRangeTree
+  return ()

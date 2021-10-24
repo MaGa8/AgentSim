@@ -6,9 +6,11 @@ module MultiRangeTree
   (
     NonEmpty(..), (<|)
   , BinTree(..)
-  , Nest(..), NTree    
+  , Nest(..), NTree
   , isFlat, isLeaf, root, roots, children, nest, elimNest
-  , floodFull, flood, floodF, drainFull, drain, echoFull, echo, mapNest
+  , floodFull, flood, floodF, drainFull, drain, echoFull, echo, mapNest, zipNest
+  -- new functions, destined to replace the other zoo
+  , newDrain, newEcho
   , labelNestLevels, prettyPrintNest
   , MultiRangeTree, Range, Query, Pointer(..), Content(..)
   , contentValues, contentKeys, range, mapWithLevelKey
@@ -30,8 +32,10 @@ import qualified BinTree as B
 import BinTree(BinTree(..))
 
 import Control.Applicative
-import Control.Monad(when)
+import Control.Monad(when, join)
 import Control.Arrow(left,right,(&&&))
+import Control.Monad.Trans
+import Control.Monad.Trans.Maybe
 
 import Rank
 
@@ -76,11 +80,11 @@ isFlat = elimNest (const True) (const False)
 isLeaf :: Nest a b -> Bool
 isLeaf = elimNest B.isLeaf B.isLeaf
 
-fromNest :: Nest a b -> NTree a b
-fromNest (Nest t) = t
+toNest :: Nest a b -> NTree a b
+toNest (Nest t) = t
 
-fromFlat :: Nest a b -> BinTree a b
-fromFlat (Flat t) = t
+toFlat :: Nest a b -> BinTree a b
+toFlat (Flat t) = t
 
 root :: Nest a b -> Either b a
 root = elimNest B.root (B.elimTree (\(x,_) _ _ -> Right x) (\(x,_) -> Right x))
@@ -142,6 +146,9 @@ floodM :: forall a b c d e m.
 floodM fb fnst fsub fl x t = elimNest () () t
 -}
 
+newDrain :: (a -> Maybe c -> Maybe (c,c) -> c) -> (b -> c) -> Nest a b -> c
+newDrain fb fl = undefined
+
 drainFull :: forall a b c d.
              (a -> Either c d -> (d,d) -> d) -- ^ eliminate nested branch
           -> (a -> Either c d -> d) -- ^ eliminate nested leaf
@@ -151,7 +158,7 @@ drainFull :: forall a b c d.
 drainFull fnb fnl ffb ffl = elimNest (Left . B.drain ffb ffl) (Right . B.drain handleNestBranch handleNestLeaf)
   where
     handleNestBranch :: (a,Nest a b) -> d -> d -> d
-    handleNestBranch (x,nst) cl cr = fnb x (drainFull fnb fnl ffb ffl nst) (cl,cr) 
+    handleNestBranch (x,nst) cl cr = fnb x (drainFull fnb fnl ffb ffl nst) (cl,cr)
     handleNestLeaf :: (a,Nest a b) -> d
     handleNestLeaf (x,nst) = fnl x (drainFull fnb fnl ffb ffl nst)
 
@@ -168,6 +175,25 @@ drain f g = either id id . drainFull fnb fnl ffb g
     ffb :: a -> c -> c -> c
     ffb x cl cr = f x Nothing $ Just (cl,cr)
 
+recaseDrainer :: (a -> b -> (b,b) -> c) -> (a -> b -> c) -> (a -> (b,b) -> c) -> a -> Maybe b -> Maybe (b,b) -> c
+recaseDrainer nestedBranch _ _ x (Just nst) (Just pair) = nestedBranch x nst pair
+recaseDrainer _ nestedLeaf _ x (Just nst) Nothing = nestedLeaf x nst
+recaseDrainer _ _ flatBranch x Nothing (Just pair) = flatBranch x pair
+
+adaptFlatBranch :: (a -> Maybe b -> Maybe (b,b) -> c) -> a -> b -> b -> c
+adaptFlatBranch f x l r = f x Nothing (Just (l,r))
+
+newEcho :: forall a b c d e. (a -> Maybe e -> Maybe (e,e) -> (c,e))
+        -> (b -> (d,e))
+        -> Nest a b -> (Nest c d, e)
+newEcho fb fl = elimNest (first Flat . B.echo (adaptFlatBranch fb) fl) (first Nest . B.echo handleNestBranch handleNestLeaf)
+  where
+    handleNestBranch :: (a, Nest a b) -> e -> e -> ((c, Nest c d), e)
+    handleNestBranch (x,nst) le re = let (nst', nste) = newEcho fb fl nst in first (,nst') $ fb x (Just nste) (Just (le,re))
+    handleNestLeaf :: (a, Nest a b) -> ((c, Nest c d), e)
+    handleNestLeaf (x,nst) = let (nst', nste) = newEcho fb fl nst in first (,nst') $ fb x (Just nste) Nothing
+
+
 echoFull :: (a -> e -> (e,e) -> (c,e)) -- ^ echo for nested inner node
          -> (a -> e -> (c,e)) -- ^ echo for nested leaf
          -> (a -> e -> e -> (c,e)) -- ^ echo for flat inner node
@@ -176,9 +202,9 @@ echoFull :: (a -> e -> (e,e) -> (c,e)) -- ^ echo for nested inner node
 echoFull fnb fnl ffb ffl = either id id . drainFull echoNestBranch echoNestLeaf echoFlatBranch echoFlatLeaf
   where
     echoNestBranch x nst ((l,el),(r,er)) = let (n,e) = either id id nst
-                                           in first (\x' -> Nest $ Branch (x',n) (fromNest l) (fromNest r)) $ fnb x e (el,er)
+                                           in first (\x' -> Nest $ Branch (x',n) (toNest l) (toNest r)) $ fnb x e (el,er)
     echoNestLeaf x nst = let (n,e) = either id id nst in first (\x' -> Nest $ Leaf (x',n)) $ fnl x e
-    echoFlatBranch x (l,el) (r,er) = first (\x' -> Flat $ Branch x' (fromFlat l) (fromFlat r)) $ ffb x el er
+    echoFlatBranch x (l,el) (r,er) = first (\x' -> Flat $ Branch x' (toFlat l) (toFlat r)) $ ffb x el er
     echoFlatLeaf y = first (Flat . Leaf) $ ffl y
 
 -- first combine echo from subtrees then combine echo from nested tree
@@ -196,7 +222,25 @@ echo fnest fsub fint = echoFull echoNestBranch fnest fsub
 mapNest :: (a -> c) -> (b -> d) -> Nest a b -> Nest c d
 mapNest f g = elimNest (Flat . B.mapTree f g) (Nest . B.mapTree mapNestBranch (bimap f (mapNest f g)))
   where
-    mapNestBranch = bimap f (mapNest f g)   
+    mapNestBranch = bimap f (mapNest f g)
+
+-- | zip two topologically identical trees together
+zipTree :: (a -> c -> e) -> (b -> d -> f) -> BinTree a b -> BinTree c d -> Maybe (BinTree e f)
+zipTree f g (Leaf x) (Leaf y) = Just . Leaf $ g x y
+zipTree f g (Branch x xl xr) (Branch y yl yr) = Branch (f x y) <$> zipTree f g xl yl <*> zipTree f g xr yr
+zipTree _ _ _ _ = Nothing
+
+zipTreeM :: Monad m => (a -> c -> m e) -> (b -> d -> m f) -> BinTree a b -> BinTree c d -> MaybeT m (BinTree e f)
+zipTreeM f g (Leaf x) (Leaf y) = fmap Leaf . lift $ g x y
+zipTreeM f g (Branch x xl xr) (Branch y yl yr) = Branch <$> lift (f x y) <*> zipTreeM f g xl yl <*> zipTreeM f g xr yr
+zipTreeM f g _ _ = MaybeT . return $ Nothing
+
+zipNest :: (a -> c -> e) -> (b -> d -> f) -> Nest a b -> Nest c d -> Maybe (Nest e f)
+zipNest f g (Flat t) (Flat u) = Flat <$> zipTree f g t u
+zipNest f g (Nest t) (Nest u) = do
+  values <- zipTree f f (B.mapTree fst fst t) (B.mapTree fst fst u)
+  nests <- join . runMaybeT $ zipTreeM (zipNest f g) (zipNest f g) (B.mapTree snd snd t) (B.mapTree snd snd u)
+  Nest <$> zipTree (,) (,) values nests
 
 type PadShow = String -> IO ()
 
@@ -228,7 +272,7 @@ prettyPrintNest maxd = either ($ "") ($ "") . drainFull printNestBranch printNes
       rio (pad ++ "Fr")
     printFlatLeaf :: (b,Int) -> String -> IO ()
     printFlatLeaf (x,_) = printValuePadded x
-  
+
 
 data Pointer a = Pointer{ pointerHeight :: Height, pointerSize :: Size, pointerRange :: (a,a) } deriving Show
 newtype Content k v = Content{ contents :: NonEmpty (k,v) } deriving Show
@@ -248,7 +292,7 @@ mapWithLevelKey :: (Maybe l -> a -> c) -> (Maybe l -> b -> d) -> [l] -> Nest a b
 mapWithLevelKey fb fl = floodF mapBranch splitNest (id &&& id) mapLeaf
   where
     mapBranch cmps' = (,cmps') . fb (fst <$> L.uncons cmps')
-    splitNest = maybe [] snd . L.uncons 
+    splitNest = maybe [] snd . L.uncons
     mapLeaf cmps' = fl (fst <$> L.uncons cmps')
 
 cmpBySnd f (_,x) (_,y) = f x y
@@ -325,7 +369,7 @@ contains :: Comparator v -> Query v -> Range v -> Bool
 contains fcmp (ql,qr) (rl,rr) = ql `fcmp` rl /= GT && qr `fcmp` rr /= LT
 
 overlap :: Comparator v -> Query v -> Range v -> Bool
-overlap fcmp (ql,qr) (rl,rr) = (ql `fcmp` rl /= LT && ql `fcmp` rr /= GT) || (rl `fcmp` ql /= LT && rl `fcmp` qr /= GT)
+overlap fcmp (ql,qr) (rl,rr) = ql `fcmp` rl /= LT && ql `fcmp` rr /= GT || rl `fcmp` ql /= LT && rl `fcmp` qr /= GT
 
 -- check how the first range relates to the second range
 checkQuery :: (v -> v -> Ordering) -> Query v -> Range v -> Answer
@@ -364,7 +408,7 @@ query fs q = drain collectInner collectLeaf . labelRangeContained fs q
     -- either nest or subtrees need to be Just values
     collectInner (_,Containing) nstxs subxs = fromJust $ nstxs <|> fmap (uncurry (++)) subxs
     collectInner (_,Overlapping) nstxs subxs = fromJust $ fmap (uncurry (++)) subxs <|> nstxs
-    collectLeaf (c,t) = if t then N.toList $ N.zip (contentKeys c) (contentValues c) else []    
+    collectLeaf (c,t) = if t then N.toList $ N.zip (contentKeys c) (contentValues c) else []
 
 -- returns too many results e.g. for query
 -- query fs ((4,5),(9,9)) t
