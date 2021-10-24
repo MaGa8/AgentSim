@@ -1,56 +1,56 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE Rank2Types #-}
 module Sim
   (
-    Pop, Book, Place, Arena
-  , step
+    -- Pop, Book, Place, Arena
+    -- , step
   ) where
 
 -- imports
 -- data
-import Data.Map
+import Data.Map(Map)
+import qualified Data.Map as M
+import qualified MultiRangeTree as MRT
+import qualified Data.List.NonEmpty as N
+import Data.Maybe
+import Data.Bifunctor
+
 
 -- control
 import Control.Monad.State
 
 -- custom
-import Agent
+import Agent as A
 
--- definitions
--- data
--- for later: want to update tree using new positions; forget about that for now
-data Loc i v = Loc{locmap :: Book i v, loctree :: Place i v} 
+sim :: (Ord a) => MRT.ComparatorSeq p -> Map (Agent p m a) p -> Map (Agent p m a) p
+sim comps positions = react positions . produceMessages positions $ determineNeighbors comps positions
 
--- aliases
-type Pop i a = Map i a
-type Book i v = Map i v
-type Place i v = Tree2d v i
-type Arena i v a = State (Place i v) (Pop i a)
-type Repo i m = Map i [m]
+determineNeighbors :: (Ord a) => MRT.ComparatorSeq p -> Map (Agent p m a) p -> Map (Agent p m a) [Agent p m a]
+determineNeighbors comps agents
+  | null agents = mempty
+  | otherwise = M.mapWithKey queryFun agents
+  where
+    index = MRT.buildMultiRangeTree comps (N.fromList  $ M.assocs agents)
+    queryFun agent pos = map fst $ MRT.query (N.toList comps) (agentSee agent pos) index
 
--- |perform one step of the simulation
-step :: (Agent a i v m) => Arena i v (a i v m) -> Arena i v (a i v m)
-step arena = do
-  pop <- arena
-  -- plc <- get    for now: rebuild from scratch
-  let plc = buildRange pop
-  let popTalked = converse plc pop
-  let popComputed = locCompute popTalked
-  -- put $ localize plc popComputed
-  return popComputed
+produceMessages :: (Ord a) => Map (Agent p m a) p -> Map (Agent p m a) [Agent p m a] -> Map (Agent p m a) [m]
+produceMessages positions neighbors = M.foldlWithKey (\messages ag pos -> mergeMaps (`M.lookup` agents) messages $ makeTalk ag pos) mempty positions
+  where
+    -- use to lookup complete agents given core
+    agents = M.fromList . map ((\ag -> (core ag, ag)) . fst) $ M.toList positions
+    makeTalk ag pos = maybe mempty (agentTalk ag pos . associateJoin core positions) $ M.lookup ag neighbors
 
--- |build the 2d tree containing the population
-buildRange :: (Agent a i v m) => Pop i (a i v m) -> Place i v
+mergeMaps :: (Ord b) => (a -> Maybe b) -> Map b [c] -> Map a c -> Map b [c]
+mergeMaps f = M.foldlWithKey (\mmap k v -> maybe mmap (\k' -> M.insertWith (++) k' [v] mmap) $ f k)
 
+associateJoin :: (Ord a, Ord b) => (a -> b) -> Map a c -> [a] -> Map b c
+associateJoin f full = M.fromList . mapMaybe (\x -> (f x,) <$> M.lookup x full)
 
--- |build temporary communication graph
--- this is already implicit through range tree, too expensive to materialize?
--- buildAdjacency :: Place i v -> [(i, [i])]
+react :: (Ord a) => Map (Agent p m a) p -> Map (Agent p m a) [m] -> Map (Agent p m a) p
+react = combineMaps (\ag pos messIns -> first (updateCore ag) $ agentAct ag pos messIns)
 
--- |generate all messages, distribute them among the neighborhood and perform all listens
-converse :: (Agent a i v m) => Place i v -> Pop i (a i v m) -> Pop i (a i v m)
-
-
--- |execute the local computation
-locCompute :: (Agent a i v m) => Pop i (a i v m) -> Pop i (a i v m)
-
-
-
+combineMaps :: (Ord a, Ord d) => (a -> b -> c -> (d,e)) -> Map a b -> Map a c -> Map d e
+combineMaps f m1 m2 = M.foldlWithKey (\merger k1 v1 -> maybe merger (\v2 -> insertByPair (f k1 v1 v2) merger) $ M.lookup k1 m2) mempty m1
+  where
+    insertByPair (k,v) m = M.insert k v m
