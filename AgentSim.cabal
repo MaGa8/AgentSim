@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f47b3b235c0c9ea15273911b454aa623c76daf2a5e1bccc0c230947243ccd4b6
+-- hash: 5c37c97072a13a5b4d0b994bd08786c5620a775d13fe1ad584fcf926bae78786
 
 name:           AgentSim
 version:        0.1.0.0
@@ -43,11 +43,14 @@ library
     , base >=4.7 && <5
     , containers
     , mtl
+    , random
     , transformers
   default-language: Haskell2010
 
 executable AgentSim-exe
   main-is: Main.hs
+  other-modules:
+      Messiah
   hs-source-dirs:
       app
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
@@ -57,6 +60,7 @@ executable AgentSim-exe
     , base >=4.7 && <5
     , containers
     , mtl
+    , random
     , transformers
   default-language: Haskell2010
 
@@ -76,5 +80,6 @@ test-suite AgentSim-test
     , base >=4.7 && <5
     , containers
     , mtl
+    , random
     , transformers
   default-language: Haskell2010

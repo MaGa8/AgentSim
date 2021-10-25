@@ -3,8 +3,8 @@
 {-# LANGUAGE Rank2Types #-}
 module Sim
   (
-    -- Pop, Book, Place, Arena
-    -- , step
+    module Agent
+  , sim
   ) where
 
 -- imports
@@ -21,7 +21,7 @@ import Data.Bifunctor
 import Control.Monad.State
 
 -- custom
-import Agent as A
+import Agent
 
 sim :: (Ord a) => MRT.ComparatorSeq p -> Map (Agent p m a) p -> Map (Agent p m a) p
 sim comps positions = react positions . produceMessages positions $ determineNeighbors comps positions
