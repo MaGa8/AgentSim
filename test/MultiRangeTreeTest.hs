@@ -143,5 +143,14 @@ prop_checkRangesDisjoint = testTree (fst . newEcho checkChildren (True,) . calcN
   where
     checkChildren ran _  = (,ran) . maybe True (\((lmin,lmax), (rmin,rmax)) -> lmax <= rmin)
 
+prop_checkQuery :: P3 -> P3 -> N.NonEmpty P3 -> Bool
+prop_checkQuery left right = testTree (query comparators3 (left,right)) (\pop queried -> let filtered = filterBound pop
+                                                                                             queried' = map snd queried
+                                                                                         in subsetOf queried' filtered  && subsetOf filtered queried')
+  where
+    filterBound = filter (\(x,y,z) -> let ((lx,ly,lz), (ux,uy,uz)) = (left,right)
+                                      in all (\(l,e,u) -> l <= e && e <= u) [(lx,x,ux), (ly,y,uy), (lz,z,uz)]) . map snd
+    subsetOf sub super = all (`elem` super) sub
+
 return []
 testMultiRangeTree = $quickCheckAll
