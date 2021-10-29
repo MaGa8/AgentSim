@@ -1,6 +1,7 @@
 module Lib
-    ( someFunc
+    ( module Sim
+    , module Vis
     ) where
 
-someFunc :: IO ()
-someFunc = putStrLn "someFunc"
+import Sim
+import Vis
