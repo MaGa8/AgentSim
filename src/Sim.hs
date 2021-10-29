@@ -4,13 +4,15 @@
 module Sim
   (
     module Agent
-  , sim
+  , Map, M.keys, M.lookup
+  , initPositions, sim
   ) where
 
 -- imports
 -- data
 import Data.Map(Map)
 import qualified Data.Map as M
+import MultiRangeTree(Comparator, ComparatorSeq)
 import qualified MultiRangeTree as MRT
 import qualified Data.List.NonEmpty as N
 import Data.Maybe
@@ -23,7 +25,10 @@ import Control.Monad.State
 -- custom
 import Agent
 
-sim :: (Ord a) => MRT.ComparatorSeq p -> Map (Agent p m a) p -> Map (Agent p m a) p
+initPositions :: (Ord a) => [Agent p m a] -> [p] -> Map (Agent p m a) p
+initPositions agents positions = M.fromList $ zip agents positions
+
+sim :: (Ord a) => ComparatorSeq p -> Map (Agent p m a) p -> Map (Agent p m a) p
 sim comps positions = react positions . produceMessages positions $ determineNeighbors comps positions
 
 determineNeighbors :: (Ord a) => MRT.ComparatorSeq p -> Map (Agent p m a) p -> Map (Agent p m a) [Agent p m a]
