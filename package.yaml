@@ -26,6 +26,8 @@ dependencies:
 - transformers
 - QuickCheck
 - random
+- sdl2
+- text
 
 library:
   source-dirs: src

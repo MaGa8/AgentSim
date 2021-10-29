@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 5c37c97072a13a5b4d0b994bd08786c5620a775d13fe1ad584fcf926bae78786
+-- hash: 77fb78c852a1e0aafa1089a1bba4f55092951a0ebe58fc8af22708cdabdae5fa
 
 name:           AgentSim
 version:        0.1.0.0
@@ -34,6 +34,7 @@ library
       RangeTree
       Rank
       Sim
+      Vis
   other-modules:
       Paths_AgentSim
   hs-source-dirs:
@@ -44,6 +45,8 @@ library
     , containers
     , mtl
     , random
+    , sdl2
+    , text
     , transformers
   default-language: Haskell2010
 
@@ -61,6 +64,8 @@ executable AgentSim-exe
     , containers
     , mtl
     , random
+    , sdl2
+    , text
     , transformers
   default-language: Haskell2010
 
@@ -81,5 +86,7 @@ test-suite AgentSim-test
     , containers
     , mtl
     , random
+    , sdl2
+    , text
     , transformers
   default-language: Haskell2010
