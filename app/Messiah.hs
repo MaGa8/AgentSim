@@ -106,7 +106,10 @@ debugMessiahChange, debugMessiahContinue :: R2 -> Messiah -> R2 -> String
 debugMessiahChange oldpos mess newpos = "messiah changes goal " ++ show (nextStop mess) ++ " and moves from " ++ show (bimap floor floor oldpos) ++ " to " ++ show (bimap floor floor newpos) ++ " gen " ++ show (oracle mess)
 debugMessiahContinue oldpos mess newpos = "messiah moves from " ++ show (bimap floor floor oldpos) ++ " to " ++ show (bimap floor floor newpos) ++ " towards " ++ show (bimap floor floor $ nextStop mess)
 
--- why does messiah always generate same next position?
+-- | Messiah is exclusively in one of the following states:
+-- (1) no goal: messiah generates goal and transistions to state (2)
+-- (2) has distant goal: messiah moves towards goal. 
+-- (3) reached goal: messiah voids goal
 messiahAct :: Move -> Behavior R2 Message Messiah
 messiahAct mv pos messiah _
   | pos == nextStop messiah = let (x, gen') = randomR (bimap fst fst $ boundary messiah) $ oracle messiah
@@ -122,12 +125,26 @@ moveTowards (finalx,finaly) (vx,vy) (x,y) = (x + minMag (signum gapx * signum vx
   where
     (gapx, gapy) = (finalx - x, finaly - y)
 
-debugFollowerAct :: R2 -> [Message] -> (Follower, R2) -> String
-debugFollowerAct oldpos msgs (fol, newpos) = "follower moves " ++ show oldpos ++ " to " ++ show newpos ++ " believes " ++ show (holyPlace fol) ++ " receiving " ++ show (map (\(ISawHim loc) -> loc) msgs)
+debugFollowerIdle :: [Message] -> (Follower, R2) -> String
+debugFollowerIdle msgs (fol, newpos) = "follower idle at " ++ show newpos ++ " believes " ++ show (holyPlace fol) ++ " received " ++ show (map (\(ISawHim loc) -> bimap floor floor loc) msgs)
 
+debugFollowerBusy :: R2 -> (Follower, R2) -> String
+debugFollowerBusy oldpos (fol, newpos) = "follower busy moving " ++ show oldpos ++ " to " ++ show newpos ++ " goal " ++ show (holyPlace fol)
+
+-- | Follower is a state machine
+-- (1) follower does'nt believe in a holy place:  It will listen to messages to determine the holy place. 
+-- (2) follower believes in a distant holy place: It moves towards the holy place
+-- (3) follower reached holy place: It stops believing in the holy place
 followerAct :: Move -> Behavior R2 Message Follower
-followerAct mv pos fol messages = let mdest = majorityVote $ map (\(ISawHim loc) -> loc) messages
-                                  in pipeTrace (debugFollowerAct pos messages) (fol{ holyPlace = mdest }, maybe pos (\dest -> moveTowards dest (velocity mv) pos) mdest)
+followerAct mv pos fol messages = maybe findHolyPlace moveHolyPlace $ holyPlace fol
+  where
+    findHolyPlace = pipeTrace (debugFollowerIdle messages) (fol{ holyPlace = majorityVote $ map (\(ISawHim loc) -> loc) messages}, pos)
+    moveHolyPlace holyloc
+      | isClose 0.0001 pos holyloc = (fol{ holyPlace = Nothing }, holyloc)
+      | otherwise = pipeTrace (debugFollowerBusy pos) (fol, moveTowards holyloc (velocity mv) pos)
+
+isClose :: Double -> R2 -> R2 -> Bool
+isClose eps (x1,y1) (x2,y2) = (x1 - x2)^2 + (y1 - y2)^2 <= eps
 
 majorityVote :: (Ord a) => [a] -> Maybe a
 majorityVote [] = Nothing
