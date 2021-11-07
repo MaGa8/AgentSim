@@ -1,10 +1,10 @@
 
 module Vis
   (
-    RendIO, Appearance(..), Shape(..), Size, Color
+    RendIO, Fps, Appearance(..), Shape(..), Size, Color
   , SDL.Window, SDL.Renderer
   , draw, update, drawScene
-  , setup, finish, withVis
+  , setup, finish, withVis, throttle
   ) where
 
 import Control.Monad.State
@@ -14,6 +14,8 @@ import Foreign.C.Types
 import Data.Text(pack)
 import SDL(Window, Renderer, ($=), V2(..), V3(..), V4(..))
 import qualified SDL
+
+import Debug.Trace
 
 type RendIO = StateT Renderer IO
 type Size = Int
@@ -55,6 +57,23 @@ update = get >>= SDL.present
 
 withVis :: (SDL.Window -> RendIO a) -> String -> (Int,Int) -> (Int,Int) -> IO ()
 withVis f header phydim logdim = setup header phydim logdim >>= uncurry (\window -> evalStateT (f window >> finish window))
+
+type Fps = Double
+
+throttle :: MonadIO m => Fps -> m a -> m a
+throttle fps action = do
+  tstart <- SDL.time
+  result <- action
+  remaining <- fromIntegral . calcDelay fps tstart <$> SDL.time
+  traceM ("waiting for " ++ show remaining ++ " start " ++ show tstart)
+  SDL.delay remaining
+  return result
+
+calcDelay :: Fps -- ^ desired frames per second
+          -> Double -- ^ starting time in seconds
+          -> Double -- ^ current time in seconds
+          -> Int -- ^ number of MILLIseconds to wait
+calcDelay fps tstart tstop = max 0 . ceiling . (* 1000) $ 1 / fps - (tstop - tstart)
 
 setup :: (MonadIO m) => String -> (Int,Int) -> (Int,Int) -> m (SDL.Window, SDL.Renderer)
 setup header (phyw,phyh) (logw,logh) = do

@@ -25,7 +25,7 @@ main = do
   -- positions <- getStdRandom (runState (mkPositions (0,100) (0,100) 100))
   gen <- getStdGen
   let agents = uncurry initPositions . first (\funs -> zipWith ($) funs [1 ..]) $ evalState (mkAgents 1 10) gen
-  withVis (conductSim agents 500) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
+  withVis (conductSim agents 500 20) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
 
 fieldMinX, fieldMinY, fieldMaxX, fieldMaxY :: Double
 fieldMinX = 0
@@ -62,9 +62,16 @@ genVector maxNorm = do
   norm <- state (randomR (0, maxNorm))
   angle <- state (randomR (0, 2*pi))
   return (cos angle * norm, sin angle * norm)
-                   
-conductSim :: Map Instance V -> Iterations -> Window -> RendIO (Map Instance V)
-conductSim agents 0 win = return agents
-conductSim agents niter win = let agents' = sim M.comparatorSeq agents
-                              in drawScene (map (uncurry M.appear) $ Map.toList agents') >> conductSim agents' (niter - 1) win
-  
+
+logicStates :: Map Instance V -> [Map Instance V]
+logicStates agents = let agents' = sim M.comparatorSeq agents in agents' : logicStates agents'
+
+conductSim :: Map Instance V -> Iterations -> Fps -> Window -> RendIO (Map Instance V)
+conductSim agents niter fps win = fmap last . mapM (\agentState -> renderToScreen agentState >> return agentState) . take niter $ logicStates agents
+  where
+    renderToScreen agents' = throttle fps . drawScene . map (uncurry M.appear) $ Map.toList agents'
+      
+
+-- conductSim agents 0 _ _ = return agents
+-- conductSim agents niter fps win = let agents' = sim M.comparatorSeq agents
+                                  -- in drawScene (map (uncurry M.appear) $ Map.toList agents') >> conductSim agents' (niter - 1) win
