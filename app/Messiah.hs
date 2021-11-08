@@ -6,6 +6,7 @@ module Messiah
   , appear
   , R2, comparatorSeq
   , generatePositions
+  , debugMessages, debugAgent
   ) where
 
 import Data.Map(Map, (!))
@@ -114,8 +115,10 @@ messiahAct :: Move -> Behavior R2 Message Messiah
 messiahAct mv pos messiah _
   | pos == nextStop messiah = let (x, gen') = randomR (bimap fst fst $ boundary messiah) $ oracle messiah
                                   (y, gen'') = randomR (bimap snd snd $ boundary messiah) gen'
-                              in pipeTrace (uncurry (debugMessiahChange pos)) (messiah{ nextStop = (x,y), oracle = gen'' }, moveTowards (x,y) (velocity mv) pos)
-  | otherwise = pipeTrace (uncurry (debugMessiahContinue pos)) (messiah, moveTowards (nextStop messiah) (velocity mv) pos)
+                                  -- in pipeTrace (uncurry (debugMessiahChange pos)) (messiah{ nextStop = (x,y), oracle = gen'' }, moveTowards (x,y) (velocity mv) pos)
+                              in (messiah{ nextStop = (x,y), oracle = gen'' }, moveTowards (x,y) (velocity mv) pos)
+  -- x | otherwise = pipeTrace (uncurry (debugMessiahContinue pos)) (messiah, moveTowards (nextStop messiah) (velocity mv) pos)
+  | otherwise = (messiah, moveTowards (nextStop messiah) (velocity mv) pos)
 
 minMag :: (Ord a, Num a) => a -> a -> a
 minMag x y = if abs x < abs y then x else y
@@ -138,10 +141,12 @@ debugFollowerBusy oldpos (fol, newpos) = "follower busy moving " ++ show oldpos 
 followerAct :: Move -> Behavior R2 Message Follower
 followerAct mv pos fol messages = maybe findHolyPlace moveHolyPlace $ holyPlace fol
   where
-    findHolyPlace = pipeTrace (debugFollowerIdle messages) (fol{ holyPlace = majorityVote $ map (\(ISawHim loc) -> loc) messages}, pos)
+    -- findHolyPlace = pipeTrace (debugFollowerIdle messages) (fol{ holyPlace = majorityVote $ map (\(ISawHim loc) -> loc) messages}, pos)
+    findHolyPlace = (fol{ holyPlace = majorityVote $ map (\(ISawHim loc) -> loc) messages}, pos)
     moveHolyPlace holyloc
       | isClose 0.0001 pos holyloc = (fol{ holyPlace = Nothing }, holyloc)
-      | otherwise = pipeTrace (debugFollowerBusy pos) (fol, moveTowards holyloc (velocity mv) pos)
+      -- x | otherwise = pipeTrace (debugFollowerBusy pos) (fol, moveTowards holyloc (velocity mv) pos)
+      | otherwise = (fol, moveTowards holyloc (velocity mv) pos)
 
 isClose :: Double -> R2 -> R2 -> Bool
 isClose eps (x1,y1) (x2,y2) = (x1 - x2)^2 + (y1 - y2)^2 <= eps
@@ -161,3 +166,32 @@ forkAgent f g agdat = either (f (getMove agdat)) (g (getMove agdat)) $ getSpec a
 
 joinAgent :: AgentData -> Either Messiah Follower -> AgentData
 joinAgent agdat = either (\messiah -> agdat{ getSpec = Left messiah }) (\follower -> agdat{ getSpec = Right follower })
+
+debugMessages :: Map Instance [Message] -> String
+debugMessages = (++ "\n") . concatMap toString . M.toList
+  where
+    toString (ag, ins) = show (getId $ core ag) ++ " gets " ++ concatMap showMessage ins ++ "\n"
+    showMessage (ISawHim pos) = show $ bimap floor floor pos
+
+debugAgent :: Map Instance R2 -> String
+debugAgent = (++ "\n") . concatMap (\(ag, pos) -> (++ "\n") . either (const $ debugMessiah ag pos) (const $ debugFollower ag pos) . getSpec $ core ag) . M.toList
+
+debugMessiah :: Instance -> R2 -> String
+debugMessiah ag pos = "messiah " ++ identifier ++ " at " ++ position ++ " status " ++ status
+  where
+    agdat = core ag
+    spec = fromJust $ elimWithMessiah (\_ _ m -> m) agdat
+    identifier = show (getId agdat)
+    position = show $ bimap floor floor pos
+    status = "moving to " ++ show (bimap floor floor $ nextStop spec)
+
+debugFollower :: Instance -> R2 -> String
+debugFollower ag pos = "follower " ++ identifier ++ " at " ++ position ++ " status " ++ status
+  where
+    agdat = core ag
+    spec = fromJust $ elimWithFollower (\_ _ f -> f) agdat
+    identifier = show (getId agdat)
+    position = show $ bimap floor floor pos
+    status
+      | isJust (holyPlace spec) = "moving to holy " ++ show (bimap floor floor . fromJust $ holyPlace spec)
+      | otherwise = "idle"

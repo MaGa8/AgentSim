@@ -65,7 +65,6 @@ throttle fps action = do
   tstart <- SDL.time
   result <- action
   remaining <- fromIntegral . calcDelay fps tstart <$> SDL.time
-  traceM ("waiting for " ++ show remaining ++ " start " ++ show tstart)
   SDL.delay remaining
   return result
 

@@ -5,7 +5,7 @@ module Sim
   (
     module Agent
   , Map, M.keys, M.lookup
-  , initPositions, sim
+  , initPositions, sim, simDebug
   ) where
 
 -- imports
@@ -18,18 +18,24 @@ import qualified Data.List.NonEmpty as N
 import Data.Maybe
 import Data.Bifunctor
 
-
 -- control
 import Control.Monad.State
 
 -- custom
 import Agent
+import Debug.Trace
 
 initPositions :: (Ord a) => [Agent p m a] -> [p] -> Map (Agent p m a) p
 initPositions agents positions = M.fromList $ zip agents positions
 
 sim :: (Ord a) => ComparatorSeq p -> Map (Agent p m a) p -> Map (Agent p m a) p
 sim comps positions = react positions . produceMessages positions $ determineNeighbors comps positions
+
+pipeTrace :: (a -> String) -> a -> a
+pipeTrace f x = trace (f x) x
+
+simDebug :: (Ord a) => (Map (Agent p m a) [m] -> String) -> (Map (Agent p m a) p -> String) -> ComparatorSeq p -> Map (Agent p m a) p -> Map (Agent p m a) p
+simDebug fOutMessage fOutAgent comps positions = pipeTrace fOutAgent . react positions . pipeTrace fOutMessage . produceMessages positions $ determineNeighbors comps positions
 
 determineNeighbors :: (Ord a) => MRT.ComparatorSeq p -> Map (Agent p m a) p -> Map (Agent p m a) [Agent p m a]
 determineNeighbors comps agents

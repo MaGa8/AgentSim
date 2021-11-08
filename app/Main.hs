@@ -65,7 +65,7 @@ genVector minNorm maxNorm = do
   return (cos angle * norm, sin angle * norm)
 
 logicStates :: Map Instance V -> [Map Instance V]
-logicStates agents = let agents' = sim M.comparatorSeq agents in agents' : logicStates agents'
+logicStates agents = let agents' = simDebug M.debugMessages M.debugAgent M.comparatorSeq agents in agents' : logicStates agents'
 
 conductSim :: Map Instance V -> Iterations -> Fps -> Window -> RendIO (Map Instance V)
 conductSim agents niter fps win = fmap last . mapM (\agentState -> renderToScreen agentState >> return agentState) . take niter $ logicStates agents
