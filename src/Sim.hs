@@ -59,9 +59,22 @@ associateJoin :: (Ord a, Ord b) => (a -> b) -> Map a c -> [a] -> Map b c
 associateJoin f full = M.fromList . mapMaybe (\x -> (f x,) <$> M.lookup x full)
 
 react :: (Ord a) => Map (Agent p m a) p -> Map (Agent p m a) [m] -> Map (Agent p m a) p
-react = combineMaps (\ag pos messIns -> first (updateCore ag) $ agentAct ag pos messIns)
-
-combineMaps :: (Ord a, Ord d) => (a -> b -> c -> (d,e)) -> Map a b -> Map a c -> Map d e
-combineMaps f m1 m2 = M.foldlWithKey (\merger k1 v1 -> maybe merger (\v2 -> insertByPair (f k1 v1 v2) merger) $ M.lookup k1 m2) mempty m1
+react = combineMaps (\ag maybePos maybeMessIns -> handleMessages (ag,) (updateAgent ag) maybeMessIns <$> maybePos)
   where
-    insertByPair (k,v) m = M.insert k v m
+    handleMessages none_fun some_fun maybeMsgs pos = maybe (none_fun pos) (some_fun pos) maybeMsgs
+    updateAgent ag pos = first (\core -> ag{core = core}) . agentAct ag pos
+
+combineMaps :: (Ord a, Ord d) => (a -> Maybe b -> Maybe c -> Maybe (d,e)) -> Map a b -> Map a c -> Map d e
+combineMaps f m1 m2 = M.union (combineMapsHalf leftCombiner part1 m2) (combineMapsHalf rightCombiner part2 m1)
+  where
+    part1 = M.mapWithKey (\k v1 -> f k (Just v1)) m1
+    part2 = M.mapWithKey (\k v2 mv1 -> f k mv1 (Just v2)) m2
+    leftCombiner _ fapp mk2 = fapp mk2
+    rightCombiner _ fapp mk1 = fapp mk1
+
+-- | inserts result of combination for all keys of m1
+combineMapsHalf :: (Ord a, Ord d) => (a -> b -> Maybe c -> Maybe (d,e)) -> Map a b -> Map a c -> Map d e
+combineMapsHalf f m1 m2 = M.foldlWithKey (\merger k1 v1 -> maybe merger (insertPair merger) . f k1 v1 $ M.lookup k1 m2) mempty m1
+  where
+    insertPair m (k,v) = M.insert k v m
+    

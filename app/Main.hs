@@ -12,6 +12,8 @@ import Control.Monad.State
 
 import System.Random as R
 
+import Debug.Trace
+
 type V = M.R2
 type M = M.Message
 type A = M.AgentData
@@ -25,7 +27,7 @@ main = do
   -- positions <- getStdRandom (runState (mkPositions (0,100) (0,100) 100))
   gen <- getStdGen
   let agents = uncurry initPositions . first (\funs -> zipWith ($) funs [1 ..]) $ evalState (mkAgents 1 25) gen
-  withVis (conductSim agents 100 10) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
+  withVis (conductSim agents 1000 25) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
 
 fieldMinX, fieldMinY, fieldMaxX, fieldMaxY :: Double
 fieldMinX = 0
@@ -39,8 +41,8 @@ veloMax = 5
   
 mkAgents :: (R.RandomGen g) => Int -> Int -> State g ([M.Uid -> Instance], [V])
 mkAgents nmessiah nfollower = do
-  messiahs <- replicateM nmessiah (reorder M.messiah <$> return 100 <*> genMove <*> genMessiah)
-  followers <- replicateM nfollower (reorder M.follower <$> return 0 <*> genMove <*> genFollower)
+  messiahs <- replicateM nmessiah (reorder M.messiah <$> return 30 <*> genMove <*> genMessiah)
+  followers <- replicateM nfollower (reorder M.follower <$> return 5 <*> genMove <*> genFollower)
   pos <- replicateM (nmessiah + nfollower) genPosition
   return (messiahs ++ followers, pos)
   where
@@ -65,7 +67,7 @@ genVector minNorm maxNorm = do
   return (cos angle * norm, sin angle * norm)
 
 logicStates :: Map Instance V -> [Map Instance V]
-logicStates agents = let agents' = simDebug M.debugMessages M.debugAgent M.comparatorSeq agents in agents' : logicStates agents'
+logicStates agents = let agents' = (\ags -> trace ("num agents " ++ show (length ags)) ags) $ simDebug M.debugMessages M.debugAgent M.comparatorSeq agents in agents' : logicStates agents'
 
 conductSim :: Map Instance V -> Iterations -> Fps -> Window -> RendIO (Map Instance V)
 conductSim agents niter fps win = fmap last . mapM (\agentState -> renderToScreen agentState >> return agentState) . take niter $ logicStates agents
