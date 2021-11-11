@@ -59,9 +59,9 @@ associateJoin :: (Ord a, Ord b) => (a -> b) -> Map a c -> [a] -> Map b c
 associateJoin f full = M.fromList . mapMaybe (\x -> (f x,) <$> M.lookup x full)
 
 react :: (Ord a) => Map (Agent p m a) p -> Map (Agent p m a) [m] -> Map (Agent p m a) p
-react = combineMaps (\ag maybePos maybeMessIns -> handleMessages (ag,) (updateAgent ag) maybeMessIns <$> maybePos)
+react = combineMaps (\ag maybePos maybeMessIns -> handleMessages (updateAgent ag) (updateAgent ag) maybeMessIns <$> maybePos)
   where
-    handleMessages none_fun some_fun maybeMsgs pos = maybe (none_fun pos) (some_fun pos) maybeMsgs
+    handleMessages none_fun some_fun maybeMsgs pos = maybe (none_fun pos []) (some_fun pos) maybeMsgs
     updateAgent ag pos = first (\core -> ag{core = core}) . agentAct ag pos
 
 combineMaps :: (Ord a, Ord d) => (a -> Maybe b -> Maybe c -> Maybe (d,e)) -> Map a b -> Map a c -> Map d e
