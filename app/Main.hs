@@ -26,8 +26,8 @@ main = do
   -- agents <- getStdRandom (runState mkAgents)
   -- positions <- getStdRandom (runState (mkPositions (0,100) (0,100) 100))
   gen <- getStdGen
-  let agents = uncurry initPositions . first (\funs -> zipWith ($) funs [1 ..]) $ evalState (mkAgents 1 25) gen
-  withVis (conductSim agents 1000 25) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
+  let agents = uncurry initPositions . first (\funs -> zipWith ($) funs [1 ..]) $ evalState (mkAgents 1 200) gen
+  withVis (conductSim agents 100 10) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
 
 fieldMinX, fieldMinY, fieldMaxX, fieldMaxY :: Double
 fieldMinX = 0
@@ -37,11 +37,11 @@ fieldMaxY = 100
 
 veloMin, veloMax :: Double
 veloMin = 2
-veloMax = 5
+veloMax = 3
   
 mkAgents :: (R.RandomGen g) => Int -> Int -> State g ([M.Uid -> Instance], [V])
 mkAgents nmessiah nfollower = do
-  messiahs <- replicateM nmessiah (reorder M.messiah <$> return 30 <*> genMove <*> genMessiah)
+  messiahs <- replicateM nmessiah (reorder M.messiah <$> return 10 <*> genMove <*> genMessiah)
   followers <- replicateM nfollower (reorder M.follower <$> return 5 <*> genMove <*> genFollower)
   pos <- replicateM (nmessiah + nfollower) genPosition
   return (messiahs ++ followers, pos)
@@ -51,7 +51,7 @@ mkAgents nmessiah nfollower = do
                                   -- in R.randomR (0, maxRange) gen)
     genMove = (\v -> M.Move{ M.velocity = v }) <$> genVector veloMin veloMax
     genMessiah = M.Messiah ((fieldMinX,fieldMinY), (fieldMaxX,fieldMaxY)) <$> genCoord Nothing <*> state (first mkStdGen . random)
-    genFollower = return $ M.Follower Nothing
+    genFollower = return $ M.initFollower 5 15
     genPosition = genCoord Nothing
 
 genCoord :: (R.RandomGen g, MonadState g m) => Maybe (M.R2, M.R2) -> m M.R2
@@ -67,7 +67,8 @@ genVector minNorm maxNorm = do
   return (cos angle * norm, sin angle * norm)
 
 logicStates :: Map Instance V -> [Map Instance V]
-logicStates agents = let agents' = (\ags -> trace ("num agents " ++ show (length ags)) ags) $ simDebug M.debugMessages M.debugAgent M.comparatorSeq agents in agents' : logicStates agents'
+-- logicStates agents = let agents' = (\ags -> trace ("num agents " ++ show (length ags)) ags) $ simDebug M.debugMessages M.debugAgent M.comparatorSeq agents in agents' : logicStates agents'
+logicStates agents = let agents' = (\ags -> trace ("num agents " ++ show (length ags)) ags) $ sim M.comparatorSeq agents in agents' : logicStates agents'
 
 conductSim :: Map Instance V -> Iterations -> Fps -> Window -> RendIO (Map Instance V)
 conductSim agents niter fps win = fmap last . mapM (\agentState -> renderToScreen agentState >> return agentState) . take niter $ logicStates agents

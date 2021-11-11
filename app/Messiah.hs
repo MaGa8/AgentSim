@@ -2,7 +2,7 @@
 module Messiah
   (
     Instance, Message, Uid, AgentData(..), Messiah(..), Follower(..), Move(..)
-  , messiah, follower
+  , messiah, follower, initFollower
   , appear
   , R2, comparatorSeq
   , generatePositions
@@ -16,6 +16,7 @@ import qualified Data.Map as M
 import Data.Bifunctor
 import Data.Maybe
 
+import Control.Applicative((<|>))
 import Control.Monad.State
 
 import System.Random as R
@@ -32,7 +33,7 @@ comparatorSeq = (\x y -> fst x `compare` fst y) :| [\x y -> snd x `compare` snd 
 
 newtype Move = Move{ velocity :: R2 }
 data Messiah = Messiah{ boundary :: (R2, R2), nextStop :: R2, oracle :: StdGen }
-newtype Follower = Follower{ holyPlace :: Maybe R2 }
+data Follower = Follower{ holyPlace :: Maybe R2, lastMove :: Maybe R2, num_overshoots :: Int, num_idles :: Int, overshooting :: Maybe Int, idling :: Maybe Int }
 newtype Message = ISawHim R2
 
 type Uid = Int
@@ -52,6 +53,11 @@ messiah ident radius move m = Agent{ talk = speak, act = behave, see = ballSight
 follower :: Uid -> Double -> Move -> Follower -> Instance
 follower ident radius move follower = Agent{ talk = speak, act = behave, see = ballSight radius, core = AgentData{ getId = ident, getSpec = Right follower, getMove = move} }
 
+initFollower :: Int -- ^ number of iterations the agent keeps moving after reaching the target
+             -> Int -- ^ number of cylces the agent does nothing after reaching the target and overshooting
+             -> Follower
+initFollower overshoot_cycles idle_cycles = Follower{ holyPlace = Nothing, lastMove = Nothing, overshooting = Nothing, idling = Nothing, num_overshoots = overshoot_cycles, num_idles = idle_cycles }
+
 elimAgentData :: (Uid -> Move -> Either Messiah Follower -> a) -> AgentData -> a
 elimAgentData f agdat = f (getId agdat) (getMove agdat) (getSpec agdat)
 
@@ -70,11 +76,11 @@ generatePositions :: (RandomGen g) => (R2, R2) -> g -> [(R2, g)]
 generatePositions bound@((x1,y1), (x2,y2)) g = let ((x,g'), (y,g'')) = (randomR (x1,x2) g, randomR (y1,y2) g') in ((x,y),g'') : generatePositions bound g''
 
 appear :: Instance -> R2 -> Appearance
-appear agent pos
-  | isMessiah (core agent) = Appearance ( centerRectAround pos 1 1
-                                           , (255, 0, 0))
-  | isFollower (core agent) = Appearance ( centerRectAround pos 1 1
-                                            , (0, 255, 0))
+appear agent pos = elimAgentData (\_ _ -> either messiahAppear followerAppear) $ core agent
+  where
+    messiahAppear _ = Appearance (centerRectAround pos 1 1, (255, 0, 0))
+    followerAppear fol = let color = fromJust $ ((122,122,255) <$ holyPlace fol) <|> ((0,0,255) <$ overshooting fol) <|> ((0,255,255) <$ idling fol) <|> Just (0,255,0)
+                         in Appearance (centerRectAround pos 1 1, color)
 
 centerRectAround :: R2 -> Int -> Int -> Shape Int
 centerRectAround (x,y) w h = Rectangle (xfloor - halfw, yfloor - halfh) w h
@@ -115,18 +121,21 @@ messiahAct :: Move -> Behavior R2 Message Messiah
 messiahAct mv pos messiah _
   | pos == nextStop messiah = let (x, gen') = randomR (bimap fst fst $ boundary messiah) $ oracle messiah
                                   (y, gen'') = randomR (bimap snd snd $ boundary messiah) gen'
-                                  -- in pipeTrace (uncurry (debugMessiahChange pos)) (messiah{ nextStop = (x,y), oracle = gen'' }, moveTowards (x,y) (velocity mv) pos)
-                              in (messiah{ nextStop = (x,y), oracle = gen'' }, moveTowards (x,y) (velocity mv) pos)
-  -- x | otherwise = pipeTrace (uncurry (debugMessiahContinue pos)) (messiah, moveTowards (nextStop messiah) (velocity mv) pos)
-  | otherwise = (messiah, moveTowards (nextStop messiah) (velocity mv) pos)
+                              in (messiah{ nextStop = (x,y), oracle = gen'' }, fst $ moveTowards (x,y) (velocity mv) pos)
+  | otherwise = (messiah, fst $ moveTowards (nextStop messiah) (velocity mv) pos)
 
 minMag :: (Ord a, Num a) => a -> a -> a
 minMag x y = if abs x < abs y then x else y
 
-moveTowards :: R2 -> R2 -> R2 -> R2
-moveTowards (finalx,finaly) (vx,vy) (x,y) = (x + minMag (signum gapx * signum vx * vx) gapx, y + minMag (signum gapy * signum vy * vy) gapy)
+addR2 :: R2 -> R2 -> R2
+addR2 (x1,y1) (x2,y2) = (x1 + x2, y1 + y2)
+
+-- | return (new_position, move_vector)
+moveTowards :: R2 -> R2 -> R2 -> (R2, R2)
+moveTowards (finalx,finaly) (vx,vy) pos@(x,y) = (addR2 pos dmove, dmove)
   where
     (gapx, gapy) = (finalx - x, finaly - y)
+    dmove = (minMag (signum gapx * signum vx * vx) gapx, minMag (signum gapy * signum vy * vy) gapy)
 
 debugFollowerIdle :: [Message] -> (Follower, R2) -> String
 debugFollowerIdle msgs (fol, newpos) = "follower idle at " ++ show newpos ++ " believes " ++ show (holyPlace fol) ++ " received " ++ show (map (\(ISawHim loc) -> bimap floor floor loc) msgs)
@@ -135,18 +144,21 @@ debugFollowerBusy :: R2 -> (Follower, R2) -> String
 debugFollowerBusy oldpos (fol, newpos) = "follower busy moving " ++ show oldpos ++ " to " ++ show newpos ++ " goal " ++ show (holyPlace fol)
 
 -- | Follower is a state machine
--- (1) follower does'nt believe in a holy place:  It will listen to messages to determine the holy place. 
--- (2) follower believes in a distant holy place: It moves towards the holy place
--- (3) follower reached holy place: It stops believing in the holy place
+-- (1) follower is listening for a holy place [initial]. Waits for a message and choose by majority. Transitions: (2)
+-- (2) follower got a holy place. Follower moves to holy place, sends tells others to go there too and if it arrived sets overshooting and resets holyPlace. Transitions (3)
+-- (3) Follower has overshooting > 0. Follower keeps repeats last motion and decrements overshooting and upon reaching overshooting == 0 sets idling and resets overshooting.  Transitions: (4)
+-- (4) follower has idling > 0.  Follower does nothing, decrements idling and upon reaching idling == 0 resets idling.  Transitions: (1)
 followerAct :: Move -> Behavior R2 Message Follower
-followerAct mv pos fol messages = maybe findHolyPlace moveHolyPlace $ holyPlace fol
+followerAct mv pos fol messages = fromJust $ (moveTo <$> holyPlace fol) <|> (moveOvershoot <$> overshooting fol <*> lastMove fol) <|> (stayIdle <$> idling fol) <|> Just listenForMessage
   where
-    -- findHolyPlace = pipeTrace (debugFollowerIdle messages) (fol{ holyPlace = majorityVote $ map (\(ISawHim loc) -> loc) messages}, pos)
-    findHolyPlace = (fol{ holyPlace = majorityVote $ map (\(ISawHim loc) -> loc) messages}, pos)
-    moveHolyPlace holyloc
-      | isClose 0.0001 pos holyloc = (fol{ holyPlace = Nothing }, holyloc)
-      -- x | otherwise = pipeTrace (debugFollowerBusy pos) (fol, moveTowards holyloc (velocity mv) pos)
-      | otherwise = (fol, moveTowards holyloc (velocity mv) pos)
+    moveTo loc
+      | isClose 0.0001 pos loc = (fol{holyPlace=Nothing, overshooting=Just (num_overshoots fol)}, pos)
+      | otherwise = let (new_pos, v) = moveTowards loc (velocity mv) pos in (fol{lastMove = Just v}, new_pos)
+    moveOvershoot 0 _ = (fol{overshooting=Nothing, lastMove=Nothing, idling=Just (num_idles fol)}, pos)
+    moveOvershoot n dmv = (fol{overshooting=Just (n-1)}, addR2 pos dmv)
+    stayIdle 0 = (fol{idling=Nothing}, pos)
+    stayIdle n = (fol{idling=Just (n-1)}, pos)
+    listenForMessage = let getloc (ISawHim loc) = loc in (fol{holyPlace = majorityVote $ map getloc messages}, pos)
 
 isClose :: Double -> R2 -> R2 -> Bool
 isClose eps (x1,y1) (x2,y2) = (x1 - x2)^2 + (y1 - y2)^2 <= eps
