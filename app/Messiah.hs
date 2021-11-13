@@ -31,7 +31,7 @@ type R2 = (Double, Double)
 comparatorSeq :: NonEmpty (R2 -> R2 -> Ordering)
 comparatorSeq = (\x y -> fst x `compare` fst y) :| [\x y -> snd x `compare` snd y]
 
-newtype Move = Move{ velocity :: R2 }
+newtype Move = Move{ velocity :: Double }
 data Messiah = Messiah{ boundary :: (R2, R2), nextStop :: R2, oracle :: StdGen }
 data Follower = Follower{ holyPlace :: Maybe R2, lastMove :: Maybe R2, num_overshoots :: Int, num_idles :: Int, overshooting :: Maybe Int, idling :: Maybe Int }
 newtype Message = ISawHim R2
@@ -119,9 +119,9 @@ debugMessiahContinue oldpos mess newpos = "messiah moves from " ++ show (bimap f
 -- (3) reached goal: messiah voids goal
 messiahAct :: Move -> Behavior R2 Message Messiah
 messiahAct mv pos messiah _
-  | pos == nextStop messiah = let (x, gen') = randomR (bimap fst fst $ boundary messiah) $ oracle messiah
-                                  (y, gen'') = randomR (bimap snd snd $ boundary messiah) gen'
-                              in (messiah{ nextStop = (x,y), oracle = gen'' }, fst $ moveTowards (x,y) (velocity mv) pos)
+  | isClose 0.001 pos (nextStop messiah) = let (x, gen') = randomR (bimap fst fst $ boundary messiah) $ oracle messiah
+                                               (y, gen'') = randomR (bimap snd snd $ boundary messiah) gen'
+                                           in (messiah{ nextStop = (x,y), oracle = gen'' }, fst $ moveTowards (x,y) (velocity mv) pos)
   | otherwise = (messiah, fst $ moveTowards (nextStop messiah) (velocity mv) pos)
 
 minMag :: (Ord a, Num a) => a -> a -> a
@@ -131,11 +131,12 @@ addR2 :: R2 -> R2 -> R2
 addR2 (x1,y1) (x2,y2) = (x1 + x2, y1 + y2)
 
 -- | return (new_position, move_vector)
-moveTowards :: R2 -> R2 -> R2 -> (R2, R2)
-moveTowards (finalx,finaly) (vx,vy) pos@(x,y) = (addR2 pos dmove, dmove)
+moveTowards :: R2 -> Double -> R2 -> (R2, R2)
+moveTowards (finalx,finaly) v pos@(x,y) = (addR2 pos dmove, dmove)
   where
     (gapx, gapy) = (finalx - x, finaly - y)
-    dmove = (minMag (signum gapx * signum vx * vx) gapx, minMag (signum gapy * signum vy * vy) gapy)
+    move_frac = let dist = gapx^2 + gapy^2 in min (v / dist) 1
+    dmove = (move_frac * gapx, move_frac * gapy)
 
 debugFollowerIdle :: [Message] -> (Follower, R2) -> String
 debugFollowerIdle msgs (fol, newpos) = "follower idle at " ++ show newpos ++ " believes " ++ show (holyPlace fol) ++ " received " ++ show (map (\(ISawHim loc) -> bimap floor floor loc) msgs)
@@ -152,7 +153,7 @@ followerAct :: Move -> Behavior R2 Message Follower
 followerAct mv pos fol messages = fromJust $ (moveTo <$> holyPlace fol) <|> (moveOvershoot <$> overshooting fol <*> lastMove fol) <|> (stayIdle <$> idling fol) <|> Just listenForMessage
   where
     moveTo loc
-      | isClose 0.0001 pos loc = (fol{holyPlace=Nothing, overshooting=Just (num_overshoots fol)}, pos)
+      | isClose 0.001 pos loc = (fol{holyPlace=Nothing, overshooting=Just (num_overshoots fol)}, pos)
       | otherwise = let (new_pos, v) = moveTowards loc (velocity mv) pos in (fol{lastMove = Just v}, new_pos)
     moveOvershoot 0 _ = (fol{overshooting=Nothing, lastMove=Nothing, idling=Just (num_idles fol)}, pos)
     moveOvershoot n dmv = (fol{overshooting=Just (n-1)}, addR2 pos dmv)
