@@ -1,5 +1,5 @@
 
-module Messiah
+module Instances.Messiah
   (
     Instance, Message, Uid, AgentData(..), Messiah(..), Follower(..), Move(..)
   , messiah, follower, initFollower
