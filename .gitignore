@@ -1,3 +1,6 @@
 .stack-work/
 *~
 *#
+*.prof
+*.log
+*.out
