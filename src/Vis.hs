@@ -4,7 +4,7 @@ module Vis
     RendIO, Fps, Appearance(..), Shape(..), Size, Color
   , SDL.Window, SDL.Renderer
   , draw, update, drawScene
-  , setup, finish, withVis, throttle
+  , setup, finish, withVis, throttle, throttleDebug
   ) where
 
 import Control.Monad.State
@@ -66,6 +66,16 @@ throttle fps action = do
   result <- action
   remaining <- fromIntegral . calcDelay fps tstart <$> SDL.time
   SDL.delay remaining
+  return result
+
+throttleDebug :: MonadIO m => Fps -> m a -> m a
+throttleDebug fps action = do
+  tstart_sec <- SDL.time
+  result <- action
+  tend_sec <- SDL.time
+  SDL.delay (fromIntegral $ calcDelay fps tstart_sec tend_sec)
+  let timeTaken = max (tend_sec - tstart_sec) (1 / fps)
+  traceM $ "fps " ++ show (1 / timeTaken)
   return result
 
 calcDelay :: Fps -- ^ desired frames per second

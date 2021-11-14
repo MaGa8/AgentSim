@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 77fb78c852a1e0aafa1089a1bba4f55092951a0ebe58fc8af22708cdabdae5fa
+-- hash: 1a010591db30bf6324d6a52f3468984ab37c90e485f48df917dabd3006fe64f9
 
 name:           AgentSim
 version:        0.1.0.0
@@ -29,6 +29,7 @@ library
   exposed-modules:
       Agent
       BinTree
+      Instances.Messiah
       Lib
       MultiRangeTree
       RangeTree
@@ -52,8 +53,6 @@ library
 
 executable AgentSim-exe
   main-is: Main.hs
-  other-modules:
-      Messiah
   hs-source-dirs:
       app
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
