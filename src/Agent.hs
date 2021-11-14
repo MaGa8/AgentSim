@@ -11,7 +11,7 @@ module Agent
 import Data.Map as M
 
 type Neighbor d a p = (d,a,p)
-type Speech d p m a = forall t. p -> a -> t (Neighbor d a p) -> [(d,m)]
+type Speech d p m a = forall t. (Foldable t) => p -> a -> t (Neighbor d a p) -> [(d,m)]
 type Behavior p m a = p -> a -> [m] -> (a,p)
 type Sight p a = p -> a -> (p,p)
 

@@ -1,9 +1,10 @@
+
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Main where
 
 import Lib
-import qualified Messiah as M
+import qualified Instances.Messiah as M
 
 import qualified Data.Map as Map
 import Data.Bifunctor
@@ -17,7 +18,7 @@ import Debug.Trace
 type V = M.R2
 type M = M.Message
 type A = M.AgentData
-type Instance = Agent V M A
+type Instance = M.Instance
 type Iterations = Int
 
 main :: IO ()
@@ -26,33 +27,35 @@ main = do
   -- agents <- getStdRandom (runState mkAgents)
   -- positions <- getStdRandom (runState (mkPositions (0,100) (0,100) 100))
   gen <- getStdGen
-  let agents = uncurry initPositions . first (\funs -> zipWith ($) funs [1 ..]) $ evalState (mkAgents 1 1000) gen
-  withVis (conductSim agents 2500 30) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
+  let agents = (\funs -> zipWith ($) funs [1 ..]) $ evalState (mkAgents 1 1000) gen
+  withVis (conductSim agents 2500 15) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
 
 fieldMinX, fieldMinY, fieldMaxX, fieldMaxY :: Double
 fieldMinX = 0
 fieldMinY = 0
-fieldMaxX = 100
-fieldMaxY = 100
+fieldMaxX = 200
+fieldMaxY = 200
 
-veloMin, veloMax :: Double
-veloMin = 5
-veloMax = 15
+followVeloMin, followVeloMax, messiahVeloMin, messiahVeloMax  :: Double
+followVeloMin = 10
+followVeloMax = 20
+messiahVeloMin = 35
+messiahVeloMax = 40
+
   
-mkAgents :: (R.RandomGen g) => Int -> Int -> State g ([M.Uid -> Instance], [V])
+mkAgents :: (R.RandomGen g) => Int -> Int -> State g [M.Uid -> Instance]
 mkAgents nmessiah nfollower = do
-  messiahs <- replicateM nmessiah (reorder M.messiah <$> return 10 <*> genMove <*> genMessiah)
-  followers <- replicateM nfollower (reorder M.follower <$> return 5 <*> genMove <*> genFollower)
-  pos <- replicateM (nmessiah + nfollower) genPosition
-  return (messiahs ++ followers, pos)
+  messiahs <- replicateM nmessiah (reorder M.messiah <$> return 10 <*> genMessiahMove <*> genCoord Nothing <*> genMessiah)
+  followers <- replicateM nfollower (reorder M.follower <$> return 5 <*> genFollowerMove <*> genCoord Nothing <*> genFollower)
+  return (messiahs ++ followers)
   where
-    reorder f viewRange move kind uid = f uid viewRange move kind
+    reorder f viewRange move pos kind uid = f uid viewRange move pos kind
     -- genViewRange = state (\gen -> let maxRange = max (fieldMaxX - fieldMinX) (fieldMaxY - fieldMinY)
                                   -- in R.randomR (0, maxRange) gen)
-    genMove = (\v -> M.Move{ M.velocity = v }) <$> state (randomR (veloMin, veloMax))
+    genMessiahMove = (\v -> M.Move{ M.velocity = v }) <$> state (randomR (followVeloMin, followVeloMax))
+    genFollowerMove = (\v -> M.Move{ M.velocity = v }) <$> state (randomR (messiahVeloMin, messiahVeloMax))
     genMessiah = M.Messiah ((fieldMinX,fieldMinY), (fieldMaxX,fieldMaxY)) <$> genCoord Nothing <*> state (first mkStdGen . random)
     genFollower = return $ M.initFollower 5 15
-    genPosition = genCoord Nothing
 
 genCoord :: (R.RandomGen g, MonadState g m) => Maybe (M.R2, M.R2) -> m M.R2
 genCoord mbounds = (,) <$> state (randomR xbound) <*> state (randomR ybound)
@@ -66,14 +69,14 @@ genVector minNorm maxNorm = do
   angle <- state (randomR (0, pi))
   return (cos angle * norm, sin angle * norm)
 
-logicStates :: Map Instance V -> [Map Instance V]
+logicStates :: [Instance] -> [[Instance]]
 -- logicStates agents = let agents' = simDebug M.debugMessages M.debugAgent M.comparatorSeq agents in agents' : logicStates agents'
 logicStates agents = let agents' = sim M.comparatorSeq agents in agents' : logicStates agents'
 
-conductSim :: Map Instance V -> Iterations -> Fps -> Window -> RendIO (Map Instance V)
+conductSim :: [Instance] -> Iterations -> Fps -> Window -> RendIO [Instance]
 conductSim agents niter fps win = fmap last . mapM (\agentState -> renderToScreen agentState >> return agentState) . take niter $ logicStates agents
   where
-    renderToScreen agents' = throttle fps . drawScene . map (uncurry M.appear) $ Map.toList agents'
+    renderToScreen agents' = throttleDebug fps . drawScene . map M.appear $ agents'
       
 
 -- conductSim agents 0 _ _ = return agents

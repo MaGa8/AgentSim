@@ -15,6 +15,7 @@ import Data.List.NonEmpty(NonEmpty(..))
 import qualified Data.Map as M
 import Data.Bifunctor
 import Data.Maybe
+import Data.Foldable (foldl')
 
 import Control.Applicative((<|>))
 import Control.Monad.State
@@ -25,6 +26,7 @@ import Debug.Trace
 
 import Lib
 import Vis
+
 
 type R2 = (Double, Double)
 
@@ -38,7 +40,7 @@ newtype Message = ISawHim R2
 
 type Uid = Int
 data AgentData = AgentData{ getId :: Uid, getSpec :: Either Messiah Follower, getMove :: Move }
-type Instance = Agent R2 Message AgentData
+type Instance = Agent Uid R2 Message AgentData
 
 
 instance Eq AgentData where
@@ -47,11 +49,11 @@ instance Eq AgentData where
 instance Ord AgentData where
   a1 <= a2 = getId a1 <= getId a2
 
-messiah :: Uid -> Double -> Move -> Messiah -> Instance
-messiah ident radius move m = Agent{ talk = speak, act = behave, see = ballSight radius, core = AgentData{ getId = ident, getSpec = Left m, getMove = move} }
+messiah :: Uid -> Double -> Move -> R2 -> Messiah -> Instance
+messiah ident radius move pos m = Agent{ talk = speak, act = behave, see = ballSight radius, core = AgentData{ getId = ident, getSpec = Left m, getMove = move}, getIdent = ident, getPos = pos }
 
-follower :: Uid -> Double -> Move -> Follower -> Instance
-follower ident radius move follower = Agent{ talk = speak, act = behave, see = ballSight radius, core = AgentData{ getId = ident, getSpec = Right follower, getMove = move} }
+follower :: Uid -> Double -> Move -> R2 -> Follower -> Instance
+follower ident radius move pos follower = Agent{ talk = speak, act = behave, see = ballSight radius, core = AgentData{ getId = ident, getSpec = Right follower, getMove = move}, getIdent = ident, getPos = pos }
 
 initFollower :: Int -- ^ number of iterations the agent keeps moving after reaching the target
              -> Int -- ^ number of cylces the agent does nothing after reaching the target and overshooting
@@ -75,12 +77,12 @@ isFollower = fromMaybe False . elimWithFollower (\_ _ _ -> True)
 generatePositions :: (RandomGen g) => (R2, R2) -> g -> [(R2, g)]
 generatePositions bound@((x1,y1), (x2,y2)) g = let ((x,g'), (y,g'')) = (randomR (x1,x2) g, randomR (y1,y2) g') in ((x,y),g'') : generatePositions bound g''
 
-appear :: Instance -> R2 -> Appearance
-appear agent pos = elimAgentData (\_ _ -> either messiahAppear followerAppear) $ core agent
+appear :: Instance -> Appearance
+appear agent = elimAgentData (\_ _ -> either messiahAppear followerAppear) $ core agent
   where
-    messiahAppear _ = Appearance (centerRectAround pos 1 1, (255, 0, 0))
+    messiahAppear _ = Appearance (centerRectAround (getPos agent) 1 1, (255, 0, 0))
     followerAppear fol = let color = fromJust $ ((122,122,255) <$ holyPlace fol) <|> ((0,0,255) <$ overshooting fol) <|> ((0,255,255) <$ idling fol) <|> Just (0,255,0)
-                         in Appearance (centerRectAround pos 1 1, color)
+                         in Appearance (centerRectAround (getPos agent) 1 1, color)
 
 centerRectAround :: R2 -> Int -> Int -> Shape Int
 centerRectAround (x,y) w h = Rectangle (xfloor - halfw, yfloor - halfh) w h
@@ -97,13 +99,16 @@ mkBox r (x,y) = ((x - r, y - r), (x + r, y + r))
 ballSight :: Double -> Sight R2 a
 ballSight radius pos _ = mkBox radius pos
 
-messiahSpeech :: R2 -> Move -> Messiah -> Map AgentData R2 -> Map AgentData Message
-messiahSpeech pos _ _ = M.map (const $ ISawHim pos)
+tellAll :: (Foldable t) => R2 -> t (Uid, a, b) -> [(Uid, Message)]
+tellAll pos = foldl' (\ms (ident, _, _) -> (ident, ISawHim pos) : ms) []
 
-followerSpeech :: R2 -> Move -> Follower -> Map AgentData R2 -> Map AgentData Message
-followerSpeech _ _ follower = maybe mempty (\holyloc -> M.map (const $ ISawHim holyloc)) $ holyPlace follower
+messiahSpeech :: (Foldable t) => R2 -> Move -> Messiah -> t (Uid, AgentData, R2) -> [(Uid, Message)]
+messiahSpeech pos _ _ = tellAll pos
 
-speak :: Speech R2 Message AgentData
+followerSpeech :: (Foldable t) => R2 -> Move -> Follower -> t (Uid, AgentData, R2) -> [(Uid, Message)]
+followerSpeech _ _ follower = maybe mempty tellAll $ holyPlace follower
+
+speak :: Speech Uid R2 Message AgentData
 speak pos ag = either (messiahSpeech pos (getMove ag)) (followerSpeech pos (getMove ag)) $ getSpec ag
 
 pipeTrace :: (a -> String) -> a -> a
@@ -180,14 +185,14 @@ forkAgent f g agdat = either (f (getMove agdat)) (g (getMove agdat)) $ getSpec a
 joinAgent :: AgentData -> Either Messiah Follower -> AgentData
 joinAgent agdat = either (\messiah -> agdat{ getSpec = Left messiah }) (\follower -> agdat{ getSpec = Right follower })
 
-debugMessages :: Map Instance [Message] -> String
+debugMessages :: Map Int [Message] -> String
 debugMessages = (++ "\n") . concatMap toString . M.toList
   where
-    toString (ag, ins) = show (getId $ core ag) ++ " gets " ++ concatMap showMessage ins ++ "\n"
+    toString (ident, ins) = show ident ++ " gets " ++ concatMap showMessage ins ++ "\n"
     showMessage (ISawHim pos) = show $ bimap floor floor pos
 
-debugAgent :: Map Instance R2 -> String
-debugAgent = (++ "\n") . concatMap (\(ag, pos) -> (++ "\n") . either (const $ debugMessiah ag pos) (const $ debugFollower ag pos) . getSpec $ core ag) . M.toList
+debugAgent :: [Instance] -> String
+debugAgent = (++ "\n") . concatMap (\ag -> (++ "\n") . either (const $ debugMessiah ag (getPos ag)) (const $ debugFollower ag (getPos ag)) . getSpec $ core ag)
 
 debugMessiah :: Instance -> R2 -> String
 debugMessiah ag pos = "messiah " ++ identifier ++ " at " ++ position ++ " status " ++ status
