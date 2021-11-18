@@ -13,6 +13,7 @@ import Data.Ratio
 type Size = Int
 type Rank = Int -- ^ rank is the number of elements smaller
 
+-- lazyness only pays off if we're not scanning over the two biggest lists afterwards!
 partitionByPivot :: (a -> a -> Ordering) -> a -> [a] -> ([a],[a],[a])
 partitionByPivot fcmp piv = foldl categorize ([],[],[])
   where
@@ -41,6 +42,7 @@ medianRank = floor . (% 2) . subtract 1
 findColMedianWorker :: (a -> a -> Ordering) -> Size -> Size -> [a] -> Maybe a
 findColMedianWorker fcmp nelem chunkSize = medianOfMediansWorker fcmp nelem' (medianRank nelem') chunkSize . map pickColMid . groupsOfN chunkSize 
   where
+    -- Really slow for what it does.  Ensure groups themselves are evaluated strictly
     pickColMid = fromJust . pickMiddle . L.sortBy fcmp
     nelem' = ceiling $ nelem % chunkSize
     -- subtract one because it's #elements smaller, pick lower median
@@ -55,15 +57,16 @@ medianOfMediansWorker :: (a -> a -> Ordering) -- ^ comparator: computes Ordering
                 -> [a] -> Maybe a
 medianOfMediansWorker _ _ _ _ [] = Nothing
 medianOfMediansWorker fcmp nelem rank chunkSize xs
-  | nelem <= chunkSize = Just $ L.sortBy fcmp xs !! rank
-  | pivotLowerRank <= rank && rank <= pivotUpperRank = Just pivot
-  | rank < pivotLowerRank = medianOfMediansWorker fcmp nsmalls rank chunkSize smalls
-  | rank > pivotUpperRank = medianOfMediansWorker fcmp ngreats (rank - nelem + ngreats) chunkSize greats
+  | nelem <= chunkSize = Just $ L.sortBy fcmp xs !! rank            -- O(1)
+  | pivotLowerRank <= rank && rank <= pivotUpperRank = Just pivot            -- O(1)
+  | rank < pivotLowerRank = medianOfMediansWorker fcmp nsmalls rank chunkSize smalls            -- O(smalls)
+  | rank > pivotUpperRank = medianOfMediansWorker fcmp ngreats (rank - nelem + ngreats) chunkSize greats            -- O(greats) where w.c. n = smalls+greats
   where 
-    pivot = fromJust $ findColMedianWorker fcmp nelem chunkSize xs
-    (smalls, equals, greats) = partitionByPivot fcmp pivot xs 
-    (nsmalls, ngreats) = (length smalls, length greats)
-    (pivotLowerRank, pivotUpperRank) = (nsmalls, nelem - ngreats - 1)
+    -- require 3 passes over xs (last implicit over smalls, greats)
+    pivot = fromJust $ findColMedianWorker fcmp nelem chunkSize xs -- O(?)
+    (smalls, equals, greats) = partitionByPivot fcmp pivot xs -- O(n)
+    (nsmalls, ngreats) = (length smalls, length greats) -- O(n)
+    (pivotLowerRank, pivotUpperRank) = (nsmalls, nelem - ngreats - 1) -- O(1)
 
 pickMedian :: (a -> a -> Ordering) -> [a] -> Maybe a
 pickMedian fcmp xs = medianOfMediansWorker fcmp (length xs) (medianRank $ length xs) 5 xs
