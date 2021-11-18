@@ -140,7 +140,7 @@ moveTowards :: R2 -> Double -> R2 -> (R2, R2)
 moveTowards (finalx,finaly) v pos@(x,y) = (addR2 pos dmove, dmove)
   where
     (gapx, gapy) = (finalx - x, finaly - y)
-    move_frac = let dist = gapx^2 + gapy^2 in min (v / dist) 1
+    move_frac = let dist = sqrt $ gapx^2 + gapy^2 in min (v / dist) 1
     dmove = (move_frac * gapx, move_frac * gapy)
 
 debugFollowerIdle :: [Message] -> (Follower, R2) -> String
