@@ -46,6 +46,16 @@ executables:
     - condition: false        
       other-modules: Paths_AgentSim
 
+  profile-median-find:
+    main:		MedianFind.hs
+    source-dirs:	profile
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - AgentSim
+
 tests:
   AgentSim-test:
     main:                Spec.hs
@@ -56,3 +66,4 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - AgentSim
+
