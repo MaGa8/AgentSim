@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 
 module Rank
   (
@@ -21,6 +22,22 @@ partitionByPivot fcmp piv = foldl categorize ([],[],[])
       GT -> (x : smaller, equal, greater)
       EQ -> (smaller, x : equal, greater)
       LT -> (smaller, equal, x : greater)
+
+type Compo a = ([a], Int)
+
+emptyCompo :: Compo a
+emptyCompo = ([], 0)
+
+addToCompo :: Compo a -> a -> Compo a
+addToCompo (xs, n) = (, n+1) . (: xs) . seq n . seq xs
+
+partitionByPivot' :: Foldable t => (a -> a -> Ordering) -> a -> t a -> (Compo a, Compo a, Compo a)
+partitionByPivot' fcmp piv = foldl' categorize (emptyCompo, emptyCompo, emptyCompo)
+  where
+    categorize (smaller, equal, greater) x = case fcmp piv x of
+      GT -> (addToCompo smaller x, equal, greater)
+      EQ -> (smaller, addToCompo equal x, greater)
+      LT -> (smaller, equal, addToCompo greater x)
 
 groupsOfN :: Int -> [a] -> [[a]]
 groupsOfN n xs = g : if null xs' then [] else groupsOfN n xs'
@@ -64,8 +81,8 @@ medianOfMediansWorker fcmp nelem rank chunkSize xs
   where 
     -- require 3 passes over xs (last implicit over smalls, greats)
     pivot = fromJust $ findColMedianWorker fcmp nelem chunkSize xs -- O(?)
-    (smalls, equals, greats) = partitionByPivot fcmp pivot xs -- O(n)
-    (nsmalls, ngreats) = (length smalls, length greats) -- O(n)
+    ((smalls, nsmalls), (equals, nequals), (greats, ngreats)) = partitionByPivot' fcmp pivot xs -- O(n)
+    -- (nsmalls, ngreats) = (length smalls, length greats) -- O(n)
     (pivotLowerRank, pivotUpperRank) = (nsmalls, nelem - ngreats - 1) -- O(1)
 
 pickMedian :: (a -> a -> Ordering) -> [a] -> Maybe a
@@ -78,5 +95,5 @@ pickAtRank fcmp rank xs = medianOfMediansWorker fcmp (length xs) rank 5 xs
 partitionByMedian :: (a -> a -> Ordering) -> [a] -> Maybe (a,[a],[a])
 partitionByMedian fcmp xs = makePartition <$> pickMedian fcmp xs
   where
-    makePartition med = let (smalls, equals, greats) = partitionByPivot fcmp med xs
-                        in if length smalls <= length greats then (med, equals ++ smalls, greats) else (med, smalls, equals ++ greats)
+    makePartition med = let ((smalls, nsmalls), (equals, _), (greats, ngreats)) = partitionByPivot' fcmp med xs
+                        in if nsmalls <= ngreats then (med, equals ++ smalls, greats) else (med, smalls, equals ++ greats)

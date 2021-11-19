@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f556ae6b08aa741bc8c05c8f752692fa99b88767ab6a799f76ec84823fecc9ec
+-- hash: 6aee9dc3856abbedbc9b7a7fe14346f641c841ec4016dba4b80ab24b4b9748c6
 
 name:           AgentSim
 version:        0.1.0.0
@@ -74,7 +74,7 @@ executable profile-median-find
       Paths_AgentSim
   hs-source-dirs:
       profile
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -main-is MedianFind
   build-depends:
       AgentSim
     , QuickCheck
