@@ -10,6 +10,7 @@ module Rank
 import Data.List as L
 import Data.Maybe
 import Data.Ratio
+import Data.Foldable as F
 
 type Size = Int
 type Rank = Int -- ^ rank is the number of elements smaller
@@ -29,7 +30,7 @@ emptyCompo :: Compo a
 emptyCompo = ([], 0)
 
 addToCompo :: Compo a -> a -> Compo a
-addToCompo (xs, n) = (, n+1) . (: xs) . seq n . seq xs
+addToCompo (xs, n) x = (x : xs, n+1)
 
 partitionByPivot' :: Foldable t => (a -> a -> Ordering) -> a -> t a -> (Compo a, Compo a, Compo a)
 partitionByPivot' fcmp piv = foldl' categorize (emptyCompo, emptyCompo, emptyCompo)
@@ -65,25 +66,47 @@ findColMedianWorker fcmp nelem chunkSize = medianOfMediansWorker fcmp nelem' (me
     -- subtract one because it's #elements smaller, pick lower median
     medRank = floor . (% 2) $ nelem' - 1
 
+findColMedianWorker' :: Foldable t => (a -> a -> Ordering) -> Size -> Size -> t a -> Maybe a
+findColMedianWorker' fcmp nelem chunkSize = medianOfMediansWorker fcmp nelem' (medianRank nelem') chunkSize . produceColMedians fcmp chunkSize
+  where
+    nelem' = ceiling $ nelem % chunkSize
+
+produceColMedians :: Foldable t => (a -> a -> Ordering) -> Size -> t a -> [a]
+produceColMedians fcmp nchunk = trd . finishup . foldl' (\tup x -> processGroup $ addToGroup x tup) ([], 0, [])
+  where
+    processGroup (buffer, size, medians)
+      | size == nchunk = ([], 0, moveBufferMedian buffer medians)
+      | otherwise = (buffer, size, medians)
+    moveBufferMedian buffer medians = maybe medians (: medians) . pickMiddle $ L.sortBy fcmp buffer
+    addToGroup x (buffer, size, medians) = (x : buffer, size + 1, medians)
+    finishup (buffer, size, medians) = ([], 0, moveBufferMedian buffer medians)
+    trd (_,_,x) = x
+
 -- | select element at index rank as in the median-of-medians algorithm
 -- adapted to also work with duplicate elements
-medianOfMediansWorker :: (a -> a -> Ordering) -- ^ comparator: computes Ordering of the first with respect to the latter
+medianOfMediansWorker :: Foldable t => (a -> a -> Ordering) -- ^ comparator: computes Ordering of the first with respect to the latter
                 -> Int -- ^ number of elements in list
                 -> Int -- ^ rank of the item to select
                 -> Int -- ^ number of elements in a column
-                -> [a] -> Maybe a
-medianOfMediansWorker _ _ _ _ [] = Nothing
+                -> t a -> Maybe a
 medianOfMediansWorker fcmp nelem rank chunkSize xs
-  | nelem <= chunkSize = Just $ L.sortBy fcmp xs !! rank            -- O(1)
+  | null xs = Nothing
+  | nelem <= chunkSize = Just . (!! rank) . L.sortBy fcmp $ F.toList xs            -- O(1)
   | pivotLowerRank <= rank && rank <= pivotUpperRank = Just pivot            -- O(1)
   | rank < pivotLowerRank = medianOfMediansWorker fcmp nsmalls rank chunkSize smalls            -- O(smalls)
   | rank > pivotUpperRank = medianOfMediansWorker fcmp ngreats (rank - nelem + ngreats) chunkSize greats            -- O(greats) where w.c. n = smalls+greats
   where 
     -- require 3 passes over xs (last implicit over smalls, greats)
-    pivot = fromJust $ findColMedianWorker fcmp nelem chunkSize xs -- O(?)
+    pivot = fromJust $ findColMedianWorker' fcmp nelem chunkSize xs -- O(?)
     ((smalls, nsmalls), (equals, nequals), (greats, ngreats)) = partitionByPivot' fcmp pivot xs -- O(n)
     -- (nsmalls, ngreats) = (length smalls, length greats) -- O(n)
     (pivotLowerRank, pivotUpperRank) = (nsmalls, nelem - ngreats - 1) -- O(1)
+
+-- | obtain element at index in a foldable
+atIndex :: (Foldable t) => Int -> t a -> Maybe a
+atIndex n = either Just (const Nothing) . foldl' searcher (Right n)
+  where
+    searcher box x = box >>= (\n -> if n == 0 then Left x else Right (n-1))
 
 pickMedian :: (a -> a -> Ordering) -> [a] -> Maybe a
 pickMedian fcmp xs = medianOfMediansWorker fcmp (length xs) (medianRank $ length xs) 5 xs
