@@ -1,10 +1,11 @@
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections, ScopedTypeVariables #-}
 
 module Rank
   (
     medianRank
   , pickMedian, pickAtRank
   , partitionByPivot, partitionByMedian
+  , medianOfMedians, sicilianMedian
   ) where
 
 import Data.List as L
@@ -64,7 +65,7 @@ medianRank = floor . (% 2) . subtract 1
 
 -- | selects the lower median from the list
 findColMedianWorker :: (a -> a -> Ordering) -> Size -> Size -> [a] -> Maybe a
-findColMedianWorker fcmp nelem chunkSize = medianOfMediansWorker fcmp nelem' (medianRank nelem') chunkSize . map pickColMid . groupsOfN chunkSize
+findColMedianWorker fcmp nelem chunkSize = medianOfMedians fcmp nelem' (medianRank nelem') chunkSize . map pickColMid . groupsOfN chunkSize
   where
     -- Really slow for what it does.  Ensure groups themselves are evaluated strictly
     pickColMid = fromJust . pickMiddle . L.sortBy fcmp
@@ -72,22 +73,26 @@ findColMedianWorker fcmp nelem chunkSize = medianOfMediansWorker fcmp nelem' (me
     -- subtract one because it's #elements smaller, pick lower median
     medRank = floor . (% 2) $ nelem' - 1
 
-findColMedianWorker' :: Foldable t => (a -> a -> Ordering) -> Size -> Size -> t a -> Maybe a
-findColMedianWorker' fcmp nelem chunkSize = medianOfMediansWorker fcmp nelem' (medianRank nelem') chunkSize . produceColMedians fcmp chunkSize
+findColMedianWorker' :: forall a t. (Foldable t) => (a -> a -> Ordering) -> Size -> Size -> t a -> Maybe a
+findColMedianWorker' fcmp nelem chunkSize = medianOfMedians fcmp nelem' (medianRank nelem') chunkSize . mkArray . produceColMedians fcmp chunkSize
   where
     nelem' = ceiling $ nelem % chunkSize
+    mkArray :: ([a], Int) -> A.Array Int a
+    mkArray (xs, size) = A.listArray (0, size - 1) xs
 
-produceColMedians :: Foldable t => (a -> a -> Ordering) -> Size -> t a -> A.Array Int a
-produceColMedians fcmp nchunk = mkArray . finishup . foldl' (\tup x -> processGroup $ addToGroup x tup) ([], 0, [], 0)
+-- | Produces reversed list of local medians in nchunk-sized blocks.  Appends remainder.
+produceColMedians :: Foldable t => (a -> a -> Ordering) -> Size -> t a -> Compo a
+produceColMedians fcmp nchunk = finishup . foldl' (\tup x -> processGroup $ addToGroup x tup) ([], 0, [], 0)
   where
     processGroup (buffer, size, medians, nmeds)
       | size == nchunk = ([], 0, moveBufferMedian buffer medians, nmeds + 1)
       | otherwise = (buffer, size, medians, nmeds)
     moveBufferMedian buffer medians = maybe medians (`cons'` medians) . pickMiddle $ L.sortBy fcmp buffer
     addToGroup x (buffer, size, medians, nmeds) = (x : buffer, size + 1, medians, nmeds)
-    finishup a@(buffer, size, medians, nmeds)
-      | null buffer = a
-      | otherwise = ([], 0, moveBufferMedian buffer medians, nmeds + 1)
+    finishup (buffer, size, medians, nmeds)
+      | null buffer = (medians, nmeds)
+      -- we append the whole remainder (its median is not the same as the others)
+      | otherwise = (foldl' (flip cons') medians buffer, nmeds + 1)
     mkArray (_, _, meds, n) = A.listArray (0, n-1) meds
 
 arraySize :: (Num i, A.IArray a e, A.Ix i) => a i e -> i
@@ -95,17 +100,17 @@ arraySize = (+ 1) . uncurry subtract . A.bounds
 
 -- | select element at index rank as in the median-of-medians algorithm
 -- adapted to also work with duplicate elements
-medianOfMediansWorker :: Foldable t => (a -> a -> Ordering) -- ^ comparator: computes Ordering of the first with respect to the latter
+medianOfMedians :: Foldable t => (a -> a -> Ordering) -- ^ comparator: computes Ordering of the first with respect to the latter
                 -> Int -- ^ number of elements in list
                 -> Int -- ^ rank of the item to select
                 -> Int -- ^ number of elements in a column
                 -> t a -> Maybe a
-medianOfMediansWorker fcmp nelem rank chunkSize xs
+medianOfMedians fcmp nelem rank chunkSize xs
   | null xs = Nothing
   | nelem <= chunkSize = Just . (!! rank) . L.sortBy fcmp $ F.toList xs            -- O(1)
   | pivotLowerRank <= rank && rank <= pivotUpperRank = Just pivot            -- O(1)
-  | rank < pivotLowerRank = medianOfMediansWorker fcmp nsmalls rank chunkSize smalls            -- O(smalls)
-  | rank > pivotUpperRank = medianOfMediansWorker fcmp ngreats (rank - nelem + ngreats) chunkSize greats            -- O(greats) where w.c. n = smalls+greats
+  | rank < pivotLowerRank = medianOfMedians fcmp nsmalls rank chunkSize smalls            -- O(smalls)
+  | rank > pivotUpperRank = medianOfMedians fcmp ngreats (rank - nelem + ngreats) chunkSize greats            -- O(greats) where w.c. n = smalls+greats
   where
     -- require 3 passes over xs (last implicit over smalls, greats)
     pivot = fromJust $ findColMedianWorker' fcmp nelem chunkSize xs -- O(?)
@@ -114,12 +119,16 @@ medianOfMediansWorker fcmp nelem rank chunkSize xs
     -- (nsmalls, ngreats) = (length smalls, length greats) -- O(n)
     (pivotLowerRank, pivotUpperRank) = (nsmalls, nelem - ngreats - 1) -- O(1)
 
+sicilianMedian :: Foldable t => (a -> a -> Ordering) -> Int -> Int -> t a -> Maybe a
+sicilianMedian fcmp chunkSize nelem xs
+  | nelem <= 10*chunkSize = pickMiddle . L.sortBy fcmp $ toList xs
+  | otherwise = uncurry (flip (sicilianMedian fcmp chunkSize)) $ produceColMedians fcmp chunkSize xs
 
 pickMedian :: (a -> a -> Ordering) -> [a] -> Maybe a
-pickMedian fcmp xs = medianOfMediansWorker fcmp (length xs) (medianRank $ length xs) 5 xs
+pickMedian fcmp xs = medianOfMedians fcmp (length xs) (medianRank $ length xs) 5 xs
 
 pickAtRank :: (a -> a -> Ordering) -> Rank -> [a] -> Maybe a
-pickAtRank fcmp rank xs = medianOfMediansWorker fcmp (length xs) rank 5 xs
+pickAtRank fcmp rank xs = medianOfMedians fcmp (length xs) rank 5 xs
 
 -- partitions list into values smaller or equal and values greater than the lower median 
 partitionByMedian :: (a -> a -> Ordering) -> [a] -> Maybe (a,[a],[a])
