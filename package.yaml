@@ -28,6 +28,7 @@ dependencies:
 - random
 - sdl2
 - text
+- array
 
 library:
   source-dirs: src

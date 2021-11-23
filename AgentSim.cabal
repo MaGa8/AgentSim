@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6aee9dc3856abbedbc9b7a7fe14346f641c841ec4016dba4b80ab24b4b9748c6
+-- hash: 74f0072a985ee0ebb094f259bb3533325210cce8e6250ed8b0811dabda6b3711
 
 name:           AgentSim
 version:        0.1.0.0
@@ -42,6 +42,7 @@ library
       src
   build-depends:
       QuickCheck
+    , array
     , base >=4.7 && <5
     , containers
     , mtl
@@ -59,6 +60,7 @@ executable AgentSim-exe
   build-depends:
       AgentSim
     , QuickCheck
+    , array
     , base >=4.7 && <5
     , containers
     , mtl
@@ -78,6 +80,7 @@ executable profile-median-find
   build-depends:
       AgentSim
     , QuickCheck
+    , array
     , base >=4.7 && <5
     , containers
     , mtl
@@ -100,6 +103,7 @@ test-suite AgentSim-test
   build-depends:
       AgentSim
     , QuickCheck
+    , array
     , base >=4.7 && <5
     , containers
     , mtl
