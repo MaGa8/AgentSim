@@ -2,6 +2,7 @@
 module BinTree
   (
     BinTree(..), elimTree, unfoldTree, mapTree
+  , unfoldTree'
   , root, children, leaves
   , isLeaf
   , drain, flood, floodM, echo, echoM
@@ -15,6 +16,12 @@ data BinTree a b = Branch a (BinTree a b) (BinTree a b) | Leaf b deriving Show
 
 unfoldTree :: (a -> Either c (b, a, a)) -> a -> BinTree b c
 unfoldTree f = either Leaf (\(x, ol, or) -> Branch x (unfoldTree f ol) (unfoldTree f or)) . f
+
+unfoldTree' :: (a -> Either c (b, a, a)) -> a -> BinTree b c
+unfoldTree' f = either Leaf (\(x, ol, or) -> let
+                                left = unfoldTree f ol
+                                right = unfoldTree f or
+                                in left `seq` right `seq` x `seq` Branch x (unfoldTree f ol) (unfoldTree f or)) . f
 
 elimTree :: (a -> BinTree a b -> BinTree a b -> c) -> (b -> c) -> BinTree a b -> c
 elimTree fb _ (Branch x lt rt) = fb x lt rt

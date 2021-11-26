@@ -58,6 +58,11 @@ elimNest _ g (Nest t) = g t
 mkNest :: Either (BinTree a b) (NTree a b) -> Nest a b
 mkNest = either Flat Nest
 
+-- | forces the arguments before applying the functions
+(!.) :: (b -> c) -> (a -> b) -> a -> c
+(!.) f g x = let y = g x
+             in x `seq` y `seq` f y
+
 unfoldNest :: forall a b c d.
   -- | decide at root whether to build a Flat (Left) or a Nest (Right)
   (a -> Either b a) ->
@@ -73,6 +78,22 @@ unfoldNest p fn ff = either (Flat . B.unfoldTree ff) (Nest . B.unfoldTree nested
       (v,ns,inner) = fn s
       nst = unfoldNest p fn ff ns
       in maybe (Left (v,nst)) (\(ls,rs) -> Right ((v,nst),ls,rs)) inner
+
+unfoldNest' :: forall a b c d.
+  -- | decide at root whether to build a Flat (Left) or a Nest (Right)
+  (a -> Either b a) ->
+  -- | for Nest: construct value passed to subtree, build value at node and decide whether to build children
+  (a -> (c,a,Maybe (a,a))) ->
+  -- | for Flat: construct leaf value or construct branch value and values passed to children
+  (b -> Either d (c,b,b)) ->
+  a -> Nest c d
+unfoldNest' p fn ff = either (Flat !. B.unfoldTree' ff) (Nest !. B.unfoldTree' nestedUnfolding) . p
+  where
+    nestedUnfolding :: a -> Either (c,Nest c d) ((c,Nest c d),a,a)
+    nestedUnfolding s = let
+      (v,ns,inner) = fn s
+      nst = unfoldNest' p fn ff ns
+      in v `seq` nst `seq` maybe (Left (v,nst)) (\(ls,rs) -> Right ((v,nst),ls,rs)) inner      
 
 isFlat :: Nest a b -> Bool
 isFlat = elimNest (const True) (const False)
@@ -306,7 +327,7 @@ organize fcmp xs
   | null rs = Left . Content $ N.fromList ls
   | otherwise = Right (N.fromList ls, N.fromList rs)
   where
-    (_,ls,rs) = fromJust . partitionByMedian (cmpBySnd fcmp) $ N.toList xs
+    (_,ls,rs) = fromJust . approxPartitionByMedian (cmpBySnd fcmp) $ N.toList xs
 
 buildMultiRangeTree :: ComparatorSeq v -> NonEmpty (k,v) -> MultiRangeTree k v
 buildMultiRangeTree fs = buildPointers fs . distribute fs
