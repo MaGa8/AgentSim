@@ -3,9 +3,8 @@
 module Rank
   (
     medianRank
-  , pickMedian, pickAtRank
-  , pickApproxMedian
-  , partitionByPivot, partitionByMedian
+  , pickMedian, pickAtRank, pickApproxMedian
+  , partitionByPivot, partitionByMedian, approxPartitionByMedian
   , medianOfMedians, sicilianMedian
   ) where
 
@@ -35,12 +34,11 @@ pickAtRank :: (a -> a -> Ordering) -> Rank -> [a] -> Maybe a
 pickAtRank fcmp rank xs = medianOfMedians fcmp (length xs) rank 5 xs
 
 -- partitions list into values smaller or equal and values greater than the lower median 
-partitionByMedian :: (a -> a -> Ordering) -> [a] -> Maybe (a,[a],[a])
-partitionByMedian fcmp xs = makePartition <$> pickMedian fcmp xs
-  where
-    makePartition med = let (smalls, equals, greats) = mkArrayPartition $ partitionByPivot fcmp med xs
-                            (nsmalls, ngreats) = (arraySize smalls, arraySize greats)
-                        in if nsmalls <= ngreats then (med, A.elems equals ++ A.elems smalls, A.elems greats) else (med, A.elems smalls, A.elems equals ++ A.elems greats)
+partitionByMedian :: Foldable t => (a -> a -> Ordering) -> t a -> Maybe (a,[a],[a])
+partitionByMedian fcmp xs = makePartition fcmp xs <$> pickMedian fcmp xs
+
+approxPartitionByMedian :: Foldable t => (a -> a -> Ordering) -> t a -> Maybe (a, [a], [a])
+approxPartitionByMedian fcmp xs = makePartition fcmp xs <$> pickApproxMedian fcmp xs
 
 medianRank :: Int -> Int
 medianRank = floor . (% 2) . subtract 1
@@ -52,6 +50,11 @@ partitionByPivot fcmp piv = foldl' categorize (emptyCompo, emptyCompo, emptyComp
       GT -> (addToCompo smaller x, equal, greater)
       EQ -> (smaller, addToCompo equal x, greater)
       LT -> (smaller, equal, addToCompo greater x)
+
+makePartition :: Foldable t => (a -> a -> Ordering) -> t a -> a -> (a, [a], [a])
+makePartition fcmp xs med = let (smalls, equals, greats) = mkArrayPartition $ partitionByPivot fcmp med xs
+                                (nsmalls, ngreats) = (arraySize smalls, arraySize greats)
+                            in if nsmalls <= ngreats then (med, A.elems equals ++ A.elems smalls, A.elems greats) else (med, A.elems smalls, A.elems equals ++ A.elems greats)    
 
 mkArrayPartition :: (Compo a, Compo a, Compo a) -> (A.Array Int a, A.Array Int a, A.Array Int a)
 mkArrayPartition (c1, c2, c3) = (compo2Array c1, compo2Array c2, compo2Array c3)
