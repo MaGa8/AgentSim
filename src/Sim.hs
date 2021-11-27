@@ -58,11 +58,14 @@ determineNeighbors comps agents = map (\ag -> (ag, map fst $ MRT.query (N.toList
     -- can we get around building these intermediate maps?
     -- makeTalk ag pos = maybe mempty (agentTalk ag pos . associateJoin core positions) $ M.lookup ag neighbors
 
+strictCons :: a -> [a] -> [a]
+strictCons x xs = x `seq` x : xs
+
 produceMessages :: (Ord d) => [(Agent d p m a, [Agent d p m a])] -> Map d [m]
 produceMessages = collect . map makeTalk
   where
     makeTalk (ag,neighbors) = agentTalk ag (map (\nag -> (getIdent nag, core nag, getPos nag)) neighbors)
-    collect = M.fromListWith (\[m] -> (m :)) . map (second return) . concat
+    collect = M.fromListWith (\[m] -> (m : )) . map (second return) . concat
 
 mergeMaps :: (Ord b) => (a -> Maybe b) -> Map b [c] -> Map a c -> Map b [c]
 mergeMaps f = M.foldlWithKey' (\mmap k v -> maybe mmap (\k' -> M.insertWith (++) k' [v] mmap) $ f k)
@@ -73,7 +76,7 @@ associateJoin f full = M.fromList . mapMaybe (\x -> (f x,) <$> M.lookup x full)
 react :: (Ord d) => Map d [m] -> [Agent d p m a] -> [Agent d p m a]
 react postbox = map (\ag -> updateAgent ag . maybe (agentAct ag []) (agentAct ag) $ M.lookup (getIdent ag) postbox)
   where
-    updateAgent ag (newcore, newpos) = (`updatePos` newpos) $ updateCore ag newcore
+    updateAgent ag (newcore, newpos) = newcore `seq` newpos `seq` (`updatePos` newpos) $ updateCore ag newcore
 
 {-
   combineMaps (\ag maybePos maybeMessIns -> handleMessages (updateAgent ag) (updateAgent ag) maybeMessIns <$> maybePos)
