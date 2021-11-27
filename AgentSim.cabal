@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 74f0072a985ee0ebb094f259bb3533325210cce8e6250ed8b0811dabda6b3711
+-- hash: 333162b2f9f6b0a5782222eb3c5ff709698fdbbabddaa0ef366b9d27c3893cbc
 
 name:           AgentSim
 version:        0.1.0.0
@@ -73,10 +73,32 @@ executable AgentSim-exe
 executable profile-median-find
   main-is: MedianFind.hs
   other-modules:
+      MrtConstruction
       Paths_AgentSim
   hs-source-dirs:
       profile
   ghc-options: -threaded -rtsopts -with-rtsopts=-N -main-is MedianFind
+  build-depends:
+      AgentSim
+    , QuickCheck
+    , array
+    , base >=4.7 && <5
+    , containers
+    , mtl
+    , random
+    , sdl2
+    , text
+    , transformers
+  default-language: Haskell2010
+
+executable profile-mrt-construction
+  main-is: MrtConstruction.hs
+  other-modules:
+      MedianFind
+      Paths_AgentSim
+  hs-source-dirs:
+      profile
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -main-is MrtConstruction
   build-depends:
       AgentSim
     , QuickCheck

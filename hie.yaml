@@ -9,8 +9,20 @@ cradle:
     - path: "./profile/MedianFind.hs"
       component: "AgentSim:exe:profile-median-find"
 
+    - path: "./profile/MrtConstruction.hs"
+      component: "AgentSim:exe:profile-median-find"
+
     - path: "./profile/Paths_AgentSim.hs"
       component: "AgentSim:exe:profile-median-find"
+
+    - path: "./profile/MrtConstruction.hs"
+      component: "AgentSim:exe:profile-mrt-construction"
+
+    - path: "./profile/MedianFind.hs"
+      component: "AgentSim:exe:profile-mrt-construction"
+
+    - path: "./profile/Paths_AgentSim.hs"
+      component: "AgentSim:exe:profile-mrt-construction"
 
     - path: "./test"
       component: "AgentSim:test:AgentSim-test"

@@ -1,4 +1,5 @@
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections, BangPatterns #-}
+
 module BinTree
   (
     BinTree(..), elimTree, unfoldTree, mapTree
