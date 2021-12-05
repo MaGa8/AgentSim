@@ -27,8 +27,8 @@ main = do
   -- agents <- getStdRandom (runState mkAgents)
   -- positions <- getStdRandom (runState (mkPositions (0,100) (0,100) 100))
   gen <- getStdGen
-  let agents = (\funs -> zipWith ($) funs [1 ..]) $ evalState (mkAgents 5 5000) gen
-  withVis (conductSim agents 1000 15) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
+  let agents = (\funs -> zipWith ($) funs [1 ..]) $ evalState (mkAgents 1 2000) gen
+  withVis (conductSim' agents 1000 30) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
 
 fieldMinX, fieldMinY, fieldMaxX, fieldMaxY :: Double
 fieldMinX = 0
@@ -77,6 +77,15 @@ conductSim :: [Instance] -> Iterations -> Fps -> Window -> RendIO [Instance]
 conductSim agents niter fps win = fmap last . mapM (\agentState -> renderToScreen agentState >> return agentState) . take niter $ logicStates agents
   where
     renderToScreen agents' = throttleDebug fps . drawScene . map M.appear $ agents'
+
+iterM :: Monad m => (a -> m b) -> [a] -> m b
+iterM f [x] = f x
+iterM f (x : xs) = f x >> iterM f xs
+
+conductSim' :: [Instance] -> Iterations -> Fps -> Window -> RendIO [Instance]
+conductSim' agents niter fps win = iterM (\agst -> renderToScreen agst >> return agst) . take niter $ logicStates agents
+  where
+    renderToScreen agents' = throttleDebug fps . drawScene . map M.appear $ agents'    
       
 
 -- conductSim agents 0 _ _ = return agents
