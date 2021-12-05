@@ -1,8 +1,8 @@
-{-# LANGUAGE TupleSections, BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables, TupleSections, BangPatterns #-}
 
 module BinTree
   (
-    BinTree(..), elimTree, unfoldTree, mapTree
+    BinTree(..), elimTree, unfoldTree, joinTree, mapTree
   , unfoldTree'
   , root, children, leaves
   , isLeaf
@@ -12,6 +12,7 @@ module BinTree
 import Data.Bifunctor
 import Data.Tuple
 import qualified Data.List.NonEmpty as N
+import Control.Monad.State
 
 data BinTree a b = Branch a (BinTree a b) (BinTree a b) | Leaf b deriving Show
 
@@ -24,6 +25,47 @@ unfoldTree' f = either Leaf (\(x, ol, or) -> let
                                 right = unfoldTree f or
                                 in left `seq` right `seq` x `seq` Branch x (unfoldTree f ol) (unfoldTree f or)) . f
 
+-- | builds tree bottom up from leaf values that are combined into a binary tree as complete/as low as possible
+joinTree :: (Foldable t) => (a -> a -> a) -> t a -> BinTree a a
+joinTree f = completeFull f . balanceLeaves f
+
+completeFull :: (a -> a -> a) -> [BinTree a a] -> BinTree a a
+completeFull f [t] = t
+completeFull f ts = completeFull f . map (pair2tree f) $ mkpairs [] ts
+
+balanceLeaves :: (Foldable t) => (a -> a -> a) -> t a -> [BinTree a a]
+balanceLeaves f = uncurry arrangeExtra . bimap (map Leaf) (map Leaf) . powerlist 2
+  where
+    -- arrangePairs = map (pair2tree f) . powers2pairs
+    -- arrangeExtra extra = zipWith (\x (y, z) -> triple2tree f (x, y, z)) extra . powers2pairs
+    arrangeExtra (x : tra) (y : rem) = pair2tree f (x,y) : arrangeExtra tra rem
+    arrangeExtra [] rem = rem
+
+pair2tree :: (a -> a -> a) -> (BinTree a a, BinTree a a) -> BinTree a a
+pair2tree f (left, right) = Branch (rootU left `f` rootU right) left right
+
+triple2tree :: (a -> a -> a) -> (BinTree a a, BinTree a a, BinTree a a) -> BinTree a a
+triple2tree f (leftleft, leftright, right) = pair2tree f (pair2tree f (leftleft, leftright), right)
+
+powers2pairs :: [[a]] -> [(a,a)]
+powers2pairs = concatMap (mkpairs [])
+
+mkpairs :: [(a,a)] -> [a] -> [(a,a)]
+mkpairs pairs (x1 : x2 : xs) = mkpairs ((x1, x2) : pairs) xs
+mkpairs pairs _ = pairs
+
+-- Arranges elements into remainder and a list with a cardinality that is a power of base
+powerlist :: (Foldable t) => Int -> t a -> ([a], [a])
+powerlist base = bimap snd (($ []) . snd) . foldr (\x -> move . first (add x)) ((0, []), (base, id))
+  where
+    add x (nbuf, buf) = (nbuf + 1, x : buf)
+    move a@((nbuf, buf), (nextpow, fpowers))
+      | nbuf == nextpow = ((nextpow, []), (base*nextpow, fpowers . (++ buf))) -- performance sink, use Dlist?
+      | otherwise = a
+    analyze ((_, []), (_, powers)) = Right powers
+    analyze ((_, buf), (_, powers)) = Left (buf, powers)
+    
+
 elimTree :: (a -> BinTree a b -> BinTree a b -> c) -> (b -> c) -> BinTree a b -> c
 elimTree fb _ (Branch x lt rt) = fb x lt rt
 elimTree _ fl (Leaf y) = fl y
@@ -34,6 +76,9 @@ mapTree fb fl = elimTree (\x lt rt -> Branch (fb x) (mapTree fb fl lt) (mapTree 
 -- | Yields the root of the tree wrapped in either Left (stop, reached the bottom) or Right (keep going)
 root :: BinTree a b -> Either b a
 root = elimTree (\x _ _ -> Right x) Left
+
+rootU :: BinTree a a -> a
+rootU = either id id . root
 
 children :: BinTree a b -> Maybe (BinTree a b, BinTree a b)
 children = elimTree (\_ l -> Just . (,) l) (const Nothing)
