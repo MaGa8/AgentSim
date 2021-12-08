@@ -48,7 +48,7 @@ newtype TestPair = TestPair ([Inst], MultiRangeTree Int P3)
 -- (2) compute with the tree yielding some product
 -- (3) compare the tree against the product
 testTree :: Testable b => (Tree3d -> a) -> ([Inst] -> a -> b) -> N.NonEmpty P3 -> b
-testTree run ver ps = ver (N.toList xs) . run $ buildMultiRangeTree (N.fromList comparators3) xs
+testTree run ver ps = ver (N.toList xs) . run $ buildMultiRangeTree' (N.fromList comparators3) xs
   where
     xs :: N.NonEmpty Inst
     xs = N.zip (N.fromList [1 ..]) ps

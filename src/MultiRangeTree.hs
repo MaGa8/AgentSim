@@ -17,7 +17,7 @@ module MultiRangeTree
   , Answer(..), elimAnswer
   , contains, overlap, checkQuery
   , Comparator, ComparatorSeq
-  , buildMultiRangeTree, query
+  , buildMultiRangeTree, buildMultiRangeTree', query
   ) where
 
 import qualified Data.List.NonEmpty as N
@@ -27,6 +27,7 @@ import Data.Bifunctor
 import Data.Maybe
 import Data.Ratio
 import Data.Either
+import Data.Foldable as F
 
 import qualified BinTree as B
 import BinTree(BinTree(..))
@@ -280,8 +281,8 @@ prettyPrintNest maxd = either ($ "") ($ "") . drainFull printNestBranch printNes
     printNestBranch (x,n) nstio (lio,rio) pad = do
       printValuePadded x pad
       when (maybe True (n <) maxd) $ either ($ pad ++ "^^") ($ pad ++ "^^") nstio >> putStrLn ""
-      lio $ pad ++ "Nl"
-      rio $ pad ++ "Nr"
+      lio $ pad ++ "Nl "
+      rio $ pad ++ "Nr "
     printNestLeaf :: (a,Int) -> Either PadShow PadShow -> String -> IO ()
     printNestLeaf (x,n) nstio pad = do
       printValuePadded x pad
@@ -289,8 +290,8 @@ prettyPrintNest maxd = either ($ "") ($ "") . drainFull printNestBranch printNes
     printFlatBranch :: (a,Int) -> PadShow -> PadShow -> String -> IO ()
     printFlatBranch (x,_) lio rio pad = do
       printValuePadded x pad
-      lio (pad ++ "Fl")
-      rio (pad ++ "Fr")
+      lio (pad ++ "Fl ")
+      rio (pad ++ "Fr ")
     printFlatLeaf :: (b,Int) -> String -> IO ()
     printFlatLeaf (x,_) = printValuePadded x
 
@@ -328,6 +329,78 @@ organize fcmp xs
   | otherwise = Right (N.fromList ls, N.fromList rs)
   where
     (_,ls,rs) = fromJust . approxPartitionByMedian (cmpBySnd fcmp) $ N.toList xs
+
+buildMultiRangeTree' :: ComparatorSeq v -> NonEmpty (k,v) -> MultiRangeTree k v
+buildMultiRangeTree' (f :| fs) points = MultiRangeTree{ comparators = f :| fs, getMultiRangeTree = buildMultiRangeTreeWorker (f : fs) (top, bottoms, ptr) }
+  where
+    top = L.sortBy (cmpBySnd f) $ N.toList points
+    bottoms = map (\f' -> L.sortBy (cmpBySnd f') $ N.toList points) fs
+    ptr = Pointer{ pointerSize = N.length points, pointerHeight = -1, pointerRange = sorted2range top }
+
+-- more efficient with Sequence?
+sorted2range :: [(k,v)] -> (v,v)
+sorted2range points = (snd $ head points, snd $ last points)
+
+type RangeNest k v = Nest (Pointer v) (Content k v)
+type RangeFlat k v = BinTree (Pointer v) (Content k v)
+type Component k v = ([(k,v)], [[(k,v)]], Pointer v)
+type Subdivision k v = BinTree (Component k v) (Component k v)
+
+-- precondition: list of comparators and list of points are non-empty
+buildMultiRangeTreeWorker :: [Comparator v] -> Component k v -> RangeNest k v
+buildMultiRangeTreeWorker [f] c = Flat . B.mapTree component2pointer component2content $ subdivide f c
+buildMultiRangeTreeWorker (f : fs) c = Nest . nestTree (expandPointers fs) $ subdivide f c
+
+component2pointer :: Component k v -> Pointer v
+component2pointer (_, _, ptr) = ptr
+
+-- get empty component on input [(0,0,0), (0,0,0)]. Why?
+component2content :: Component k v -> Content k v
+component2content (pts, _, _) = Content{ contents = N.fromList pts }
+
+nestTree :: (a -> (b, Nest b c)) -> BinTree a a -> NTree b c
+nestTree f = B.mapTree f f
+
+-- Precondition: bottom of component may not be empty
+expandPointers :: [Comparator v] -> Component k v -> (Pointer v, RangeNest k v)
+expandPointers fs (top, newtop : bottoms, ptr) = (ptr, buildMultiRangeTreeWorker fs newcomp)
+  where
+    newcomp = (newtop, bottoms, ptr{ pointerRange = (snd $ head newtop, snd $ last newtop) }) -- get range more efficiently?
+    -- idea: keep range of first bottom in component
+  
+subdivide :: Comparator v -> Component k v -> Subdivision k v
+subdivide f = B.unfoldTree (\comp -> second (uncurry (comp,,)) $ halveComponent f comp)
+
+-- diagnosis: bottoms are partitioned by value but top is partitioned by position
+-- in the presence of non-unique values there is a mismatch between tops and bottoms passed to left and right (possibly resulting in empty lists)
+-- proposed fix: all lesser&equal values go left, all greater values go right for both tops and bottoms
+halveComponent :: Comparator v -> Component k v -> Either (Component k v) (Component k v, Component k v)
+halveComponent f comp@(top, bottoms, ptr)
+  -- x | uncurry f (pointerRange ptr) == EQ = Left comp
+  | leftSize == 0 || rightSize == 0 = Left comp
+  | otherwise = Right ((leftTop, leftBottoms, leftPtr), (rightTop, rightBottoms, rightPtr))
+  where    
+    (leftTop, leftSize, leftRange, rightTop, rightSize, rightRange, median) = splitMiddle f (pointerSize ptr) (pointerRange ptr) top
+    (leftBottoms, rightBottoms) = foldr' (\(l,r) -> bimap (l :) (r :)) ([], []) $ map (partitionAgainst f median) bottoms
+    (leftPtr, rightPtr) = ( Pointer{ pointerRange = leftRange, pointerSize = leftSize, pointerHeight = -1 } -- don't use pointerHeight!
+                          , Pointer{ pointerRange = rightRange, pointerSize = rightSize, pointerHeight = -1 })
+
+splitMiddle :: Comparator v -> Int -> (v,v) -> [(k,v)] -> ([(k,v)], Int, (v,v), [(k,v)], Int, (v,v), v)
+splitMiddle f size (lower, upper) points = (leftVals, leftSize, (lower, median), rightVals, rightSize, (median, upper), median)
+  where
+    midpos = floor (size % 2)
+    -- inefficient: fuse later
+    median = snd $ points !! midpos
+    (leftVals, rightVals) = L.partition ((== GT) . f median . snd) points
+    (leftSize, rightSize) = (length leftVals, length rightVals)
+
+    -- (leftSize, rightSize) = (floor (size % 2), size - leftSize)
+    -- (leftHalf, rightHalf) = splitAt leftSize points
+    -- median = snd $ head rightHalf
+
+partitionAgainst :: Comparator v -> v -> [(k,v)] -> ([(k,v)], [(k,v)])
+partitionAgainst f piv = L.partition ((== GT) . f piv . snd)
+
 
 buildMultiRangeTree :: ComparatorSeq v -> NonEmpty (k,v) -> MultiRangeTree k v
 buildMultiRangeTree fs = buildPointers fs . distribute fs
