@@ -107,12 +107,17 @@ prop_rangesCoverTop = testTree (map (either id id) . roots . calcNodeMinMax . ge
   where
     dimensionMinMax ps = map (\f -> let mapped = map (f . snd) ps in (minimum mapped, maximum mapped)) accessors
 
+rangesCoverRecCompute :: Tree3d -> Nest Bool Bool
+rangesCoverRecCompute = evalCoverage . calcNodeMinMax . getMultiRangeTree
+  where
+    evalCoverage = fst . newEcho evalBranch (const (True,Nothing))
+    evalBranch (l,u) _ subs = maybe (True, Just (l,u)) (\(leftr,rightr) -> (maybe True ((== l) . fst) leftr && maybe True ((== u) . snd) rightr, Just (l,u))) subs
+
+-- l == ll && ru == u, Just (l,u))) subs
+
 -- top-level range is correct
 prop_rangesCoverRec :: N.NonEmpty P3 -> Bool
-prop_rangesCoverRec = testTree (evalCoverage . calcNodeMinMax . getMultiRangeTree) (const checkCorrect)
-  where
-    evalCoverage = fst . newEcho evalBranch (True,)
-    evalBranch (l,u) _ subs = maybe (True, (l,u)) (\((ll,lu), (rl,ru)) -> (l == ll && ru == u, (l,u))) subs
+prop_rangesCoverRec = testTree rangesCoverRecCompute (const checkCorrect)
 
 {-
 compareWithSubranges :: (Pointer v -> Maybe (Range v) -> Maybe (Range v,Range v) -> a)
@@ -143,14 +148,27 @@ prop_checkRangesDisjoint = testTree (fst . newEcho checkChildren (True,) . calcN
   where
     checkChildren ran _  = (,ran) . maybe True (\((lmin,lmax), (rmin,rmax)) -> lmax <= rmin)
 
-prop_checkQuery :: P3 -> P3 -> N.NonEmpty P3 -> Bool
-prop_checkQuery left right = testTree (query comparators3 (left,right)) (\pop queried -> let filtered = filterBound pop
-                                                                                             queried' = map snd queried
-                                                                                         in subsetOf queried' filtered  && subsetOf filtered queried')
+checkQueryCompute :: P3 -> P3 -> Tree3d -> [Inst]
+checkQueryCompute left right = query comparators3 (left,right)
+
+checkQueryCheck :: P3 -> P3 -> [Inst] -> [Inst] -> Bool
+checkQueryCheck left right pop qresult = subsetOf result filtered && subsetOf filtered result
   where
-    filterBound = filter (\(x,y,z) -> let ((lx,ly,lz), (ux,uy,uz)) = (left,right)
-                                      in all (\(l,e,u) -> l <= e && e <= u) [(lx,x,ux), (ly,y,uy), (lz,z,uz)]) . map snd
-    subsetOf sub super = all (`elem` super) sub
+    filtered = filter (insideOf left right) $ map snd pop
+    result = map snd qresult
+
+subsetOf :: (Eq a) => [a] -> [a] -> Bool
+subsetOf sub super = all (`elem` super) sub
+
+insideOf :: P3 -> P3 -> P3 -> Bool
+insideOf (lx,ly,lz) (ux,uy,uz) (x,y,z) = all (\(l,e,u) -> l <= e && e <= u) [(lx,x,ux), (ly,y,uy), (lz,z,uz)]
+
+prop_checkQuery :: P3 -> P3 -> N.NonEmpty P3 -> Bool
+prop_checkQuery left right = testTree (checkQueryCompute left right) (checkQueryCheck left right)
+  -- where
+    -- filterBound = filter (\(x,y,z) -> let ((lx,ly,lz), (ux,uy,uz)) = (left,right)
+                                      -- in all (\(l,e,u) -> l <= e && e <= u) [(lx,x,ux), (ly,y,uy), (lz,z,uz)]) . map snd
+    -- subsetOf sub super = all (`elem` super) sub
 
 return []
 testMultiRangeTree = $quickCheckAll
