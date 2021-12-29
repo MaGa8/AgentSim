@@ -4,7 +4,7 @@ module Rank
   (
     medianRank
   , pickMedian, pickAtRank, pickApproxMedian
-  , partitionByPivot, partitionByMedian, approxPartitionByMedian
+  , partitionByMedian, approxPartitionByMedian
   , medianOfMedians, sicilianMedian
   ) where
 

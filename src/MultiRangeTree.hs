@@ -13,11 +13,11 @@ module MultiRangeTree
   , newDrain, newEcho
   , labelNestLevels, prettyPrintNest
   , MultiRangeTree(..), Range, Query, Pointer(..), Content(..)
-  , contentValues, contentKeys, range, mapWithLevelKey
+  , contentValues, contentKeys --, range, mapWithLevelKey
   , Answer(..), elimAnswer
-  , contains, overlap, checkQuery
+  , contains, disjoint, checkQuery
   , Comparator, ComparatorSeq
-  , buildMultiRangeTree, buildMultiRangeTree', query
+  , buildMultiRangeTree, query
   ) where
 
 import qualified Data.List.NonEmpty as N
@@ -37,6 +37,9 @@ import Control.Monad(when, join)
 import Control.Arrow(left,right,(&&&))
 import Control.Monad.Trans
 import Control.Monad.Trans.Maybe
+import Control.Exception
+
+import Debug.Trace as Dbg
 
 import Rank
 
@@ -44,7 +47,15 @@ type Size = Int
 type Height = Int
 type Range v = (v,v)
 
-type NTree a b = BinTree (a,Nest a b) (a,Nest a b)
+type NestNode a b = (a, Nest a b)
+
+elimNestNode :: (a -> Nest a b -> c) -> NestNode a b -> c
+elimNestNode f (x, nst) = f x nst
+
+mkNestNode :: a -> Nest a b -> NestNode a b
+mkNestNode = (,)
+
+type NTree a b = BinTree (NestNode a b) (NestNode a b)
 
 rootNTree :: NTree a b -> a
 rootNTree = either fst fst . B.root
@@ -169,7 +180,12 @@ floodM fb fnst fsub fl x t = elimNest () () t
 -}
 
 newDrain :: (a -> Maybe c -> Maybe (c,c) -> c) -> (b -> c) -> Nest a b -> c
-newDrain fb fl = undefined
+newDrain fb fl = elimNest (B.drain fbFlat fl) (B.drain fbNest flNest . B.mapTree reduceNest reduceNest)
+  where
+    fbFlat x left right = fb x Nothing (Just (left, right))
+    fbNest (x,nst) left right = fb x (Just nst) (Just (left, right))
+    flNest (x,nst) = fb x (Just nst) Nothing
+    reduceNest = elimNestNode (\x nst -> (x, newDrain fb fl nst))
 
 drainFull :: forall a b c d.
              (a -> Either c d -> (d,d) -> d) -- ^ eliminate nested branch
@@ -296,7 +312,10 @@ prettyPrintNest maxd = either ($ "") ($ "") . drainFull printNestBranch printNes
     printFlatLeaf (x,_) = printValuePadded x
 
 
-data Pointer a = Pointer{ pointerHeight :: Height, pointerSize :: Size, pointerRange :: (a,a) } deriving Show
+data Pointer a = Pointer{ pointerSize :: Size -- ^ number of points assigned to subtree
+                        , pointerPivot :: a -- ^ greatest value in the left subtree
+                        } deriving Show
+
 newtype Content k v = Content{ contents :: NonEmpty (k,v) } deriving Show
 
 contentValues :: Content k v -> NonEmpty v
@@ -305,22 +324,169 @@ contentValues = N.map snd . contents
 contentKeys :: Content k v -> NonEmpty k
 contentKeys = N.map fst . contents
 
-range :: Either (Content k v) (Pointer v) -> (v,v)
-range = either ((N.head &&& N.last) . contentValues) pointerRange
+type Comparator a = a -> a -> Ordering
+type ComparatorSeq a = NonEmpty (Comparator a)
 
 data MultiRangeTree k v = MultiRangeTree{ comparators :: ComparatorSeq v, getMultiRangeTree :: Nest (Pointer v) (Content k v) } 
 
+type Inst k v = (k,v)
+
+cmpBySnd f (_,x) (_,y) = f x y
+
+buildMultiRangeTree :: ComparatorSeq v -> NonEmpty (Inst k v) -> MultiRangeTree k v
+buildMultiRangeTree (f :| fs) points = MultiRangeTree{ comparators = f :| fs, getMultiRangeTree = buildMultiRangeTreeWorker (f : fs) top bottoms }
+  where
+    top = L.sortBy (cmpBySnd f) $ N.toList points
+    bottoms = map (\f' -> L.sortBy (cmpBySnd f') $ N.toList points) fs
+
+buildMultiRangeTreeWorker :: [Comparator v] -> [Inst k v] -> [[Inst k v]] -> Nest (Pointer v) (Content k v)
+buildMultiRangeTreeWorker [f] top [] = Flat . B.mapTree mkPointer mkContent $ subdivide f top []
+buildMultiRangeTreeWorker _ _ [] = error "Bottoms can't be empty while there's > 1 comparator."
+buildMultiRangeTreeWorker (f : fs) top bottoms = Nest . nestTree (expandBottom fs) $ subdivide f top bottoms
+
+type BinTreeU a = BinTree a a
+
+type Component k v = (v, [Inst k v], [[Inst k v]])
+
+mkPointer :: Component k v -> Pointer v
+mkPointer (pivot, top, _) = Pointer{ pointerSize = size, pointerPivot = pivot }
+  where
+    size = length top -- inefficient, improve
+
+-- precondition: top is not empty
+mkContent :: Component k v -> Content k v
+mkContent (_, top, _) = assert notEmpty Content{ contents = N.fromList top }
+  where
+    notEmpty = not $ null top
+
+subdivide :: Comparator v -> [Inst k v] -> [[Inst k v]] -> BinTreeU (Component k v)
+subdivide f top bottoms = B.unfoldTree (uncurry $ halveNode f) (top, bottoms)
+
+halveNode :: Comparator v -> [Inst k v] -> [[Inst k v]] -> Either (Component k v) (Component k v, ([Inst k v], [[Inst k v]]), ([Inst k v], [[Inst k v]]))
+halveNode f top bottoms
+  | rightSize == 0 = Left (pivot, top, bottoms)
+  | f leftmost rightmost == EQ = Left (pivot, top, bottoms)
+  | otherwise = assert (addUp && equalSized) $ Right ((pivot, top, bottoms), (top_lefts, bottom_lefts), (top_rights, bottom_rights))
+  where
+    -- INEFFICIENT!!! Improve.
+    size = length top
+    midpos = subtract 1 . ceiling $ size % 2
+    pivot = snd $ top !! midpos
+    (leftmost, rightmost) = (snd $ head top, snd $ last top)
+    split = (/= LT) . f pivot . snd
+    (top_lefts, top_rights) = cleaveByPivot f pivot top -- L.partition split top
+    (bottom_lefts, bottom_rights) = unzip $ map (cleaveByPivot f pivot) bottoms
+    (leftSize, rightSize) = (length top_lefts, length top_rights)
+    -- noneEmpty = and $ map (not . null) [top_lefts, top_rights] ++ map (not . null) [bottom_lefts, bottom_rights]
+    addUp = length top_lefts + length top_rights == size
+    equalSized = and $ map ((length top_lefts ==) . length) bottom_lefts ++ map ((length top_rights ==) . length) bottom_rights
+
+-- | divide list into instances smaller or equal instances and greater instances
+cleaveByPivot :: Comparator v -> v -> [Inst k v] -> ([Inst k v], [Inst k v])
+cleaveByPivot f pivot = L.partition ((/= LT) . f pivot . snd)
+
+nestTree :: (a -> (b, Nest b c)) -> BinTreeU a -> NTree b c
+nestTree f = B.mapTree f f
+
+-- precondition: bottoms is non-empty
+expandBottom :: [Comparator v] -> (v, [Inst k v], [[Inst k v]]) -> (Pointer v, Nest (Pointer v) (Content k v))
+expandBottom _ (_, _, []) = error "bottom may not be empty when expanding"
+expandBottom fs (pivot, top, top' : bottoms) = (Pointer{ pointerSize = size, pointerPivot = pivot }, buildMultiRangeTreeWorker fs top' bottoms)
+  where
+    size = length top -- inefficient, improve
+
+type Query v = (v,v)
+
+-- later: fuse collecting and labeling?
+query :: Query v -> MultiRangeTree k v -> [(k,v)]
+query q mrt = collectPoints $ checkRange fs q t
+  where
+    (fs, t) = (comparators mrt, getMultiRangeTree mrt)
+
+-- | first flood top level then descend to the nested trees
+floodCascade :: (a -> b -> (d, a, a)) -> (a -> c -> e) -> (a -> b -> d -> a) -> a -> Nest b c -> Nest d e
+floodCascade floodBranch floodLeaf floodDesc wave = elimNest (Flat . B.flood floodBranch floodLeaf wave) (Nest . B.flood floodNestBranch floodNestLeaf wave)
+  where
+    floodNestBranch wave' (x, nst) = let (y, waveLeft, waveRight) = floodBranch wave' x
+                                     in ((y, floodCascade floodBranch floodLeaf floodDesc (floodDesc wave' x y) nst), waveLeft, waveRight)
+    floodNestLeaf wave' (x, nst) = let (y, _, _) = floodBranch wave' x
+                                   in (y, floodCascade floodBranch floodLeaf floodDesc (floodDesc wave' x y) nst)
+
+data Answer = Contained | Overlapping | Disjoint deriving (Show, Eq)
+
+checkRange :: ComparatorSeq v -> Query v -> Nest (Pointer v) (Content k v) -> Nest (Pointer v, Answer) (Content k v, Answer)
+checkRange fs query = floodCascade checkPointer checkContent descend (query, (Nothing, Nothing), Overlapping, fs)
+  where
+    allRange = (Nothing, Nothing)
+    noRange = (Nothing, Nothing)
+    updRange newRange (query, _, ans, fs') = (query, newRange, ans, fs')
+    checkPointer parcel@(_, _, Contained, _) ptr = ((ptr, Contained), updRange allRange parcel, updRange allRange parcel)
+    checkPointer parcel@(_, _, Disjoint, _) ptr = ((ptr, Disjoint), updRange noRange parcel, updRange noRange parcel)
+    checkPointer parcel@(query, range, Overlapping, fs') ptr = let
+      ans = checkQuery (N.head fs) query range
+      (leftRange, rightRange) = splitRange (pointerPivot ptr) range
+      in ((ptr, ans), updRange leftRange parcel, updRange rightRange parcel)
+    checkContent (query, range, Overlapping, fs') con
+      | inside (N.head fs') query (snd . N.head $ contents con) = (con, Contained)
+      | otherwise = (con, Disjoint)
+    checkContent (_, _, ans, _) con = (con, ans)
+
+    descend (query, range, ans, f :| fs') _ _ = (query, range, ans, fromMaybe (error "") $ N.nonEmpty fs')
+
+-- pre: left <= pivot <= right
+splitRange :: v -> Range (Maybe v) -> (Range (Maybe v), Range (Maybe v))
+splitRange pivot (left, right) = ((left, Just pivot), (Just pivot, right))
+
+collectPoints :: Nest (Pointer v, Answer) (Content k v, Answer) -> [(k,v)]
+collectPoints = newDrain addBranch addLeaf
+  where
+    addBranch (ptr, Disjoint) _ _ = []
+    addBranch (ptr, Overlapping) _ mbSubs = maybe [] (uncurry (++)) mbSubs -- inefficient!!!
+    addBranch (ptr, Contained) mbNest _ = fromMaybe [] mbNest
+    addLeaf (con, Disjoint) = []
+    addLeaf (con, _) = N.toList $ contents con
+
+elimAnswer :: a -> a -> a -> Answer -> a
+elimAnswer xc _ _ Contained = xc
+elimAnswer _ xo _ Overlapping = xo
+elimAnswer _ _ xd Disjoint = xd
+
+inside :: Comparator v -> Query v -> v -> Bool
+inside f (lo,hi) p = f lo p /= GT && f hi p /= LT
+
+-- | predicate: query contains range
+contains :: Comparator v -> Query v -> Range v -> Bool
+contains f (ql,qr) (rl,rr) = f ql rl /= GT && f qr rr /= LT
+
+-- | predicate: query contains range where range may be extend to +/- infinity
+containsX :: Comparator v -> Query v -> Range (Maybe v) -> Bool
+containsX f q (rl, rr) = maybe False (contains f q) ((,) <$> rl <*> rr)
+
+-- | predicate: query and range are disjoint
+disjoint :: Comparator v -> Query v -> Range v -> Bool
+disjoint f (ql,qr) (rl,rr) = f ql rr == GT || f qr rl == LT
+
+-- | predicate: query and range are disjoint, where range may extend to +/- infinity
+disjointX :: Comparator v -> Query v -> Range (Maybe v) -> Bool
+disjointX f q (Just rl, Just rr) = disjoint f q (rl, rr)
+disjointX f (ql,qr) (Nothing, Just rr) = f ql rr /= GT
+disjointX f (ql,qr) (Just rl, Nothing) = f qr rl /= LT
+disjointX f _ (Nothing, Nothing) = False
+
+-- check how the first range relates to the second range
+checkQuery :: (v -> v -> Ordering) -> Query v -> Range (Maybe v) -> Answer
+checkQuery fcmp q r
+  | containsX fcmp q r = Contained
+  | disjointX fcmp q r = Disjoint
+  | otherwise = Overlapping
+
+{-
 mapWithLevelKey :: (Maybe l -> a -> c) -> (Maybe l -> b -> d) -> [l] -> Nest a b -> Nest c d
 mapWithLevelKey fb fl = floodF mapBranch splitNest (id &&& id) mapLeaf
   where
     mapBranch cmps' = (,cmps') . fb (fst <$> L.uncons cmps')
     splitNest = maybe [] snd . L.uncons
     mapLeaf cmps' = fl (fst <$> L.uncons cmps')
-
-cmpBySnd f (_,x) (_,y) = f x y
-
-type Comparator a = a -> a -> Ordering
-type ComparatorSeq a = NonEmpty (Comparator a)
 
 organize :: Comparator v -> NonEmpty (k,v) -> Either (Content k v) (NonEmpty (k,v), NonEmpty (k,v))
 organize fcmp xs
@@ -376,7 +542,7 @@ subdivide f = B.unfoldTree (\comp -> second (uncurry (comp,,)) $ halveComponent 
 -- proposed fix: all lesser&equal values go left, all greater values go right for both tops and bottoms
 halveComponent :: Comparator v -> Component k v -> Either (Component k v) (Component k v, Component k v)
 halveComponent f comp@(top, bottoms, ptr)
-  -- x | uncurry f (pointerRange ptr) == EQ = Left comp
+  | uncurry f (pointerRange ptr) == EQ = Left comp
   | leftSize == 0 || rightSize == 0 = Left comp
   | otherwise = Right ((leftTop, leftBottoms, leftPtr), (rightTop, rightBottoms, rightPtr))
   where    
@@ -385,13 +551,15 @@ halveComponent f comp@(top, bottoms, ptr)
     (leftPtr, rightPtr) = ( Pointer{ pointerRange = leftRange, pointerSize = leftSize, pointerHeight = -1 } -- don't use pointerHeight!
                           , Pointer{ pointerRange = rightRange, pointerSize = rightSize, pointerHeight = -1 })
 
+-- !!! ISSUE WAS HERE
 splitMiddle :: Comparator v -> Int -> (v,v) -> [(k,v)] -> ([(k,v)], Int, (v,v), [(k,v)], Int, (v,v), v)
-splitMiddle f size (lower, upper) points = (leftVals, leftSize, (lower, median), rightVals, rightSize, (median, upper), median)
+splitMiddle f size (lower, upper) points = (leftVals, leftSize, (lower, lowerMedian), rightVals, rightSize, (upperMedian, upper), lowerMedian)
   where
     midpos = floor (size % 2)
     -- inefficient: fuse later
-    median = snd $ points !! midpos
-    (leftVals, rightVals) = L.partition ((== GT) . f median . snd) points
+    upperMedian = snd $ points !! midpos
+    (leftVals, rightVals) = L.partition ((== GT) . f upperMedian . snd) points
+    lowerMedian = maybe lower (snd . fst) . L.uncons $ reverse leftVals
     (leftSize, rightSize) = (length leftVals, length rightVals)
 
     -- (leftSize, rightSize) = (floor (size % 2), size - leftSize)
@@ -452,10 +620,10 @@ buildPointers cmps@(fcmp :| fs) = MultiRangeTree cmps . either Flat Nest . drain
     mkLeaf :: Content k v -> SRT k v
     mkLeaf = B.Leaf
 
-data Answer = Containing | Overlapping | Disjoint deriving (Show, Eq)
+data Answer = Contained | Overlapping | Disjoint deriving (Show, Eq)
 
 elimAnswer :: a -> a -> a -> Answer -> a
-elimAnswer xc _ _ Containing = xc
+elimAnswer xc _ _ Contained = xc
 elimAnswer _ xo _ Overlapping = xo
 elimAnswer _ _ xd Disjoint = xd
 
@@ -468,7 +636,7 @@ overlap fcmp (ql,qr) (rl,rr) = ql `fcmp` rl /= LT && ql `fcmp` rr /= GT || rl `f
 -- check how the first range relates to the second range
 checkQuery :: (v -> v -> Ordering) -> Query v -> Range v -> Answer
 checkQuery fcmp q r
-  | contains fcmp q r = Containing
+  | contains fcmp q r = Contained
   | overlap fcmp q r = Overlapping
   | otherwise = Disjoint
 
@@ -476,21 +644,21 @@ type Query v = (v,v)
 
 -- check result of query conditioned on earlier answer
 checkSuccQuery :: (v -> v -> Ordering) -> Answer -> Query v -> Range v -> Answer
-checkSuccQuery _ Containing _ _ = Containing
+checkSuccQuery _ Contained _ _ = Contained
 checkSuccQuery _ Disjoint _ _ = Disjoint
 checkSuccQuery cmp Overlapping q r = checkQuery cmp q r
 
 labelRangeContained :: [v -> v -> Ordering] -> Query v -> MultiRangeTree k v -> Nest (Pointer v,Answer) (Content k v,Bool)
 labelRangeContained fs q = floodF prodB splitNest splitSub prodL (Overlapping,fs) . getMultiRangeTree
   where
-    prodB (_,[]) p = ((p,Containing),(Containing,[]))
+    prodB (_,[]) p = ((p,Contained),(Contained,[]))
     prodB (a,fs'@(cmp : _)) p = let
       a' = checkSuccQuery cmp a q $ pointerRange p
       in ((p,a'),(a',fs'))
     prodL (_,[]) c = (c,True)
-    prodL (a,cmp : fs') c = (c,checkSuccQuery cmp a q (range $ Left c) == Containing)
-    splitNest (Containing,fs') = maybe (Containing,[]) ((Overlapping,) . snd) $ L.uncons fs'
-    splitNest (a,fs') = maybe (Containing,[]) ((demote4Nest a,) . snd) $ L.uncons fs'
+    prodL (a,cmp : fs') c = (c,checkSuccQuery cmp a q (range $ Left c) == Contained)
+    splitNest (Contained,fs') = maybe (Contained,[]) ((Overlapping,) . snd) $ L.uncons fs'
+    splitNest (a,fs') = maybe (Contained,[]) ((demote4Nest a,) . snd) $ L.uncons fs'
     demote4Nest = elimAnswer Overlapping Overlapping Disjoint
     splitSub (a,fs') = ((a,fs'),(a,fs'))
 
@@ -500,12 +668,11 @@ query fs q = drain collectInner collectLeaf . labelRangeContained fs q
     collectInner :: (Pointer v,Answer) -> Maybe [(k,v)] -> Maybe ([(k,v)],[(k,v)]) -> [(k,v)]
     collectInner (_,Disjoint) _ _ = []
     -- either nest or subtrees need to be Just values
-    collectInner (_,Containing) nstxs subxs = fromJust $ nstxs <|> fmap (uncurry (++)) subxs
+    collectInner (_,Contained) nstxs subxs = fromJust $ nstxs <|> fmap (uncurry (++)) subxs
     collectInner (_,Overlapping) nstxs subxs = fromJust $ fmap (uncurry (++)) subxs <|> nstxs
     collectLeaf (c,t) = if t then N.toList $ N.zip (contentKeys c) (contentValues c) else []
+-}
 
--- returns too many results e.g. for query
--- query fs ((4,5),(9,9)) t
 demoMrt :: (MultiRangeTree Int (Int,Int), [(Int,Int) -> (Int,Int) -> Ordering])
 demoMrt = let
   ps = [(1,2), (3,4), (9,5), (7,4), (5,5), (8,1)]

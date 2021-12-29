@@ -38,7 +38,7 @@ simDebug :: (Ord d) => (Map d [m] -> String) -> ([Agent d p m a] -> String) -> C
 simDebug fOutMessage fOutAgent comps positions = pipeTrace fOutAgent . (`react` positions) . pipeTrace fOutMessage . produceMessages $ determineNeighbors comps positions
 
 determineNeighbors :: MRT.ComparatorSeq p -> [Agent d p m a] -> [(Agent d p m a, [Agent d p m a])]
-determineNeighbors comps agents = map (\ag -> (ag, map fst $ MRT.query (N.toList comps) (agentSee ag) index)) agents
+determineNeighbors comps agents = map (\ag -> (ag, map fst $ MRT.query (agentSee ag) index)) agents
   where 
     index = MRT.buildMultiRangeTree comps . N.fromList $ map (\ag -> (ag, getPos ag)) agents
 {-

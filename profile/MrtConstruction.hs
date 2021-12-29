@@ -46,7 +46,7 @@ forceAllQueries poss = forceAll . queryAll $ build
   where
     insts = zip [1 ..] poss
     build = buildMultiRangeTree (E.fromList MrtConstruction.comparators) $ E.fromList insts
-    queryAll mrt = concatMap (\(i,pos) -> query MrtConstruction.comparators (pos2Query pos) mrt) insts
+    queryAll mrt = concatMap (\(i,pos) -> query (pos2Query pos) mrt) insts
     forceAll = foldl' (\none (i, _) -> seq i none) ()
 
 mkOutput :: Int -> () -> IO Int

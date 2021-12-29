@@ -48,7 +48,7 @@ newtype TestPair = TestPair ([Inst], MultiRangeTree Int P3)
 -- (2) compute with the tree yielding some product
 -- (3) compare the tree against the product
 testTree :: Testable b => (Tree3d -> a) -> ([Inst] -> a -> b) -> N.NonEmpty P3 -> b
-testTree run ver ps = ver (N.toList xs) . run $ buildMultiRangeTree' (N.fromList comparators3) xs
+testTree run ver ps = ver (N.toList xs) . run $ buildMultiRangeTree (N.fromList comparators3) xs
   where
     xs :: N.NonEmpty Inst
     xs = N.zip (N.fromList [1 ..]) ps
@@ -149,7 +149,7 @@ prop_checkRangesDisjoint = testTree (fst . newEcho checkChildren (True,) . calcN
     checkChildren ran _  = (,ran) . maybe True (\((lmin,lmax), (rmin,rmax)) -> lmax <= rmin)
 
 checkQueryCompute :: P3 -> P3 -> Tree3d -> [Inst]
-checkQueryCompute left right = query comparators3 (left,right)
+checkQueryCompute left right = query (left,right)
 
 checkQueryCheck :: P3 -> P3 -> [Inst] -> [Inst] -> Bool
 checkQueryCheck left right pop qresult = subsetOf result filtered && subsetOf filtered result
@@ -165,10 +165,6 @@ insideOf (lx,ly,lz) (ux,uy,uz) (x,y,z) = all (\(l,e,u) -> l <= e && e <= u) [(lx
 
 prop_checkQuery :: P3 -> P3 -> N.NonEmpty P3 -> Bool
 prop_checkQuery left right = testTree (checkQueryCompute left right) (checkQueryCheck left right)
-  -- where
-    -- filterBound = filter (\(x,y,z) -> let ((lx,ly,lz), (ux,uy,uz)) = (left,right)
-                                      -- in all (\(l,e,u) -> l <= e && e <= u) [(lx,x,ux), (ly,y,uy), (lz,z,uz)]) . map snd
-    -- subsetOf sub super = all (`elem` super) sub
 
 return []
 testMultiRangeTree = $quickCheckAll
