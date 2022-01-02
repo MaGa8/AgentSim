@@ -16,6 +16,7 @@ import Data.Foldable
 import Data.Maybe
 
 import Control.Arrow((&&&))
+import Control.Applicative
 
 import MultiRangeTree
 
@@ -93,22 +94,43 @@ prop_numberOfElementsRec = testTree (nodeSizes . getMultiRangeTree) (\_ -> fst .
                                     maybe True (\((lt,leftn), (rt,rightn)) -> lt && rt && n == leftn + rightn) subs
                                 , n)
 
-calcNodeMinMax :: Nest (Pointer P3) (Content Int P3) -> Nest (Int, Int) (Int, Int)
-calcNodeMinMax = mapWithLevelKey minMaxFromPointer minMaxFromContent accessors
+labelLevels :: [l] -> Nest a b -> Nest (l,a) (l,b)
+labelLevels [] = error "need non empty list of labels to label remaining levels"
+labelLevels labels = floodF (\ls' x -> ((head ls', x), ls')) tail (id &&& id) ((,) . head) labels
+
+calcNodeRange :: Nest (Pointer P3) (Content Int P3) -> Nest (Int, Int) (Int, Int)
+calcNodeRange = fst . newEcho calcBranch calcLeaf . labelLevels accessors
   where
-    minMaxFromPointer mf ptr = let f = fromJust mf in bimap f f $ pointerRange ptr
-    minMaxFromContent mf con = let f = fromJust mf
-                                   ps = contents con
-                               in (minimum $ N.map (f . snd) ps, maximum $ N.map (f . snd) ps)
+    -- echo instances, store ranges at node
+    dupl = id &&& id
+    calcLeaf (f, con) = let
+      insts = N.toList $ snd <$> contents con
+      coord = f $ head insts
+      in (dupl coord, insts)
+    -- either left or right need to be Just
+    calcBranch (f, ptr) mbNest mbSubs = let
+      insts = fromJust $ fmap (uncurry (++)) mbSubs <|> mbNest
+      coords = map f insts
+      in ((minimum coords, maximum coords), insts)
 
 -- problem: does not pick up difference in dim 2
 prop_rangesCoverTop :: N.NonEmpty P3 -> Bool
-prop_rangesCoverTop = testTree (map (either id id) . roots . calcNodeMinMax . getMultiRangeTree) (\ps minMaxs -> and $ zipWith (==) (dimensionMinMax ps) minMaxs :: Bool)
+prop_rangesCoverTop = testTree rangesCoverTopCompute rangesCoverTopCheck
   where
     dimensionMinMax ps = map (\f -> let mapped = map (f . snd) ps in (minimum mapped, maximum mapped)) accessors
 
+rangesCoverTopCompute :: Tree3d -> [(Int, Int)]
+rangesCoverTopCompute  = map (either id id) . roots . calcNodeRange . getMultiRangeTree
+
+rangesCoverTopCheck :: [Inst] -> [(Int, Int)] -> Bool
+rangesCoverTopCheck ps ranges = length realRanges == length ranges && and (zipWith (==) realRanges ranges)
+  where
+    realRanges = zip mins maxs
+    coords = [map (f . snd) ps | f <- accessors]
+    (mins, maxs) = (map minimum coords, map maximum coords)
+
 rangesCoverRecCompute :: Tree3d -> Nest Bool Bool
-rangesCoverRecCompute = evalCoverage . calcNodeMinMax . getMultiRangeTree
+rangesCoverRecCompute = evalCoverage . calcNodeRange . getMultiRangeTree
   where
     evalCoverage = fst . newEcho evalBranch (const (True,Nothing))
     evalBranch (l,u) _ subs = maybe (True, Just (l,u)) (\(leftr,rightr) -> (maybe True ((== l) . fst) leftr && maybe True ((== u) . snd) rightr, Just (l,u))) subs
@@ -144,7 +166,7 @@ checkCorrect = drain testInner id
   where testInner t nst subs = t && maybe True (uncurry (&&)) subs && fromMaybe True nst
 
 prop_checkRangesDisjoint :: N.NonEmpty P3 -> Bool
-prop_checkRangesDisjoint = testTree (fst . newEcho checkChildren (True,) . calcNodeMinMax . getMultiRangeTree) (const checkCorrect)
+prop_checkRangesDisjoint = testTree (fst . newEcho checkChildren (True,) . calcNodeRange . getMultiRangeTree) (const checkCorrect)
   where
     checkChildren ran _  = (,ran) . maybe True (\((lmin,lmax), (rmin,rmax)) -> lmax <= rmin)
 
