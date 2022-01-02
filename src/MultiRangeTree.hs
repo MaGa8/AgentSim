@@ -401,7 +401,7 @@ type Query v = (v,v)
 query :: Query v -> MultiRangeTree k v -> [(k,v)]
 query q mrt = collectPoints $ checkRange fs q t
   where
-    (fs, t) = (comparators mrt, getMultiRangeTree mrt)
+    (fs, t) = (comparators &&& getMultiRangeTree) mrt
 
 -- | first flood top level then descend to the nested trees
 floodCascade :: (a -> b -> (d, a, a)) -> (a -> c -> e) -> (a -> b -> d -> a) -> a -> Nest b c -> Nest d e
@@ -414,37 +414,47 @@ floodCascade floodBranch floodLeaf floodDesc wave = elimNest (Flat . B.flood flo
 
 data Answer = Contained | Overlapping | Disjoint deriving (Show, Eq)
 
-checkRange :: ComparatorSeq v -> Query v -> Nest (Pointer v) (Content k v) -> Nest (Pointer v, Answer) (Content k v, Answer)
-checkRange fs query = floodCascade checkPointer checkContent descend (query, (Nothing, Nothing), Overlapping, fs)
+checkRange :: ComparatorSeq v -> Query v -> Nest (Pointer v) (Content k v) -> Nest Answer [(k,v)]
+checkRange fs query = floodCascade checkPointer (checkContent fs) descend (query, (Nothing, Nothing), Overlapping, fs)
   where
-    allRange = (Nothing, Nothing)
-    noRange = (Nothing, Nothing)
-    updRange newRange (query, _, ans, fs') = (query, newRange, ans, fs')
-    checkPointer parcel@(_, _, Contained, _) ptr = ((ptr, Contained), updRange allRange parcel, updRange allRange parcel)
-    checkPointer parcel@(_, _, Disjoint, _) ptr = ((ptr, Disjoint), updRange noRange parcel, updRange noRange parcel)
-    checkPointer parcel@(query, range, Overlapping, fs') ptr = let
-      ans = checkQuery (N.head fs) query range
-      (leftRange, rightRange) = splitRange (pointerPivot ptr) range
-      in ((ptr, ans), updRange leftRange parcel, updRange rightRange parcel)
-    checkContent (query, range, Overlapping, fs') con
-      | inside (N.head fs') query (snd . N.head $ contents con) = (con, Contained)
-      | otherwise = (con, Disjoint)
-    checkContent (_, _, ans, _) con = (con, ans)
-
     descend (query, range, ans, f :| fs') _ _ = (query, range, ans, fromMaybe (error "") $ N.nonEmpty fs')
+
+type RangeParcel v = (Query v, Range (Maybe v), Answer, ComparatorSeq v)
+
+updRange :: Range (Maybe v) -> RangeParcel v -> RangeParcel v
+updRange newRange (query, _, ans, fs') = (query, newRange, ans, fs')
+
+checkPointer :: RangeParcel v -> Pointer v -> (Answer, RangeParcel v, RangeParcel v)
+checkPointer parcel@(_, _, Contained, _) ptr = let allRange = (Nothing, Nothing) in (Contained, updRange allRange parcel, updRange allRange parcel)
+checkPointer parcel@(_, _, Disjoint, _) ptr = let noRange = (Nothing, Nothing) in (Disjoint, updRange noRange parcel, updRange noRange parcel)
+checkPointer parcel@(query, range, Overlapping, fs') ptr = let
+  ans = checkQuery (N.head fs') query range
+  (leftRange, rightRange) = splitRange (pointerPivot ptr) range
+  in (ans, updRange leftRange parcel, updRange rightRange parcel)
+  where
+    updRange newRange (query, _, ans, fs') = (query, newRange, ans, fs')
+
+checkContent :: ComparatorSeq v -> RangeParcel v -> Content k v -> [(k,v)]
+checkContent _ (_, _, Contained, _) con = N.toList $ contents con
+checkContent _ (_, _, Disjoint, _) _ = []
+checkContent fs (query, range, Overlapping, fs') con = filter allInside . N.toList $ contents con
+  where
+    allInside (_, point) = all (\f -> inside f query point) fs
 
 -- pre: left <= pivot <= right
 splitRange :: v -> Range (Maybe v) -> (Range (Maybe v), Range (Maybe v))
 splitRange pivot (left, right) = ((left, Just pivot), (Just pivot, right))
 
-collectPoints :: Nest (Pointer v, Answer) (Content k v, Answer) -> [(k,v)]
+collectPoints :: Nest Answer [(k,v)] -> [(k,v)]
 collectPoints = newDrain addBranch addLeaf
   where
-    addBranch (ptr, Disjoint) _ _ = []
-    addBranch (ptr, Overlapping) _ mbSubs = maybe [] (uncurry (++)) mbSubs -- inefficient!!!
-    addBranch (ptr, Contained) mbNest _ = fromMaybe [] mbNest
-    addLeaf (con, Disjoint) = []
-    addLeaf (con, _) = N.toList $ contents con
+    addBranch _ Nothing Nothing = error "either nest or subs need to be Just"
+    addBranch Disjoint _ _ = []
+    addBranch Overlapping _ (Just (lefts, rights)) = lefts ++ rights -- inefficient!!!
+    addBranch Overlapping (Just nests) Nothing = nests
+    addBranch Contained (Just nests) _ = nests
+    addBranch Contained Nothing (Just (lefts, rights)) = lefts ++ rights
+    addLeaf pts = pts
 
 elimAnswer :: a -> a -> a -> Answer -> a
 elimAnswer xc _ _ Contained = xc
