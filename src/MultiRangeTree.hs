@@ -479,8 +479,8 @@ disjoint f (ql,qr) (rl,rr) = f ql rr == GT || f qr rl == LT
 -- | predicate: query and range are disjoint, where range may extend to +/- infinity
 disjointX :: Comparator v -> Query v -> Range (Maybe v) -> Bool
 disjointX f q (Just rl, Just rr) = disjoint f q (rl, rr)
-disjointX f (ql,qr) (Nothing, Just rr) = f ql rr /= GT
-disjointX f (ql,qr) (Just rl, Nothing) = f qr rl /= LT
+disjointX f (ql,qr) (Nothing, Just rr) = f ql rr == GT
+disjointX f (ql,qr) (Just rl, Nothing) = f qr rl == LT
 disjointX f _ (Nothing, Nothing) = False
 
 -- check how the first range relates to the second range
