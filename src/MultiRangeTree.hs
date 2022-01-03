@@ -417,7 +417,9 @@ data Answer = Contained | Overlapping | Disjoint deriving (Show, Eq)
 checkRange :: ComparatorSeq v -> Query v -> Nest (Pointer v) (Content k v) -> Nest Answer [(k,v)]
 checkRange fs query = floodCascade checkPointer (checkContent fs) descend (query, (Nothing, Nothing), Overlapping, fs)
   where
-    descend (query, range, ans, f :| fs') _ _ = (query, range, ans, fromMaybe (error "") $ N.nonEmpty fs')
+    descend (query, range, ans, f :| fs') _ _ = let
+      errorMsg = "number of comparators needs to match tree nesting"
+        in (query, (Nothing, Nothing), Overlapping, fromMaybe (error errorMsg) $ N.nonEmpty fs')
 
 type RangeParcel v = (Query v, Range (Maybe v), Answer, ComparatorSeq v)
 
