@@ -30,6 +30,7 @@ library
       Instances.Messiah
       Lib
       MultiRangeTree
+      Nest
       RangeTree
       Rank
       Sim
