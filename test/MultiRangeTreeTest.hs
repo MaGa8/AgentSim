@@ -19,6 +19,7 @@ import Control.Arrow((&&&))
 import Control.Applicative
 
 import MultiRangeTree
+import Nest
 
 type P3 = (Int,Int,Int)
 
@@ -37,7 +38,7 @@ comparators3 :: [P3 -> P3 -> Ordering]
 comparators3 = map mk accessors
 
 instance (Arbitrary a) => Arbitrary (N.NonEmpty a) where
-  arbitrary = (:|) <$> arbitrary <*> arbitrary
+  arbitrary = (N.:|) <$> arbitrary <*> arbitrary
   shrink = mapMaybe N.nonEmpty . shrink . N.toList
 
 type Tree3d = MultiRangeTree Int P3
@@ -60,7 +61,7 @@ mkPair4List xs = let
   in TestPair (N.toList points, buildMultiRangeTree (N.fromList comparators3) points)
 
 instance Arbitrary TestPair where
-  arbitrary = mkPair4List <$> ((:|) <$> arbitrary <*> arbitrary)
+  arbitrary = mkPair4List <$> ((N.:|) <$> arbitrary <*> arbitrary)
   -- shrink (TestPair (ps,_)) = let
   --   (l,r) = bimap maybeMkPair maybeMkPair . halve $ map snd ps
   --   in maybe [] shrink l ++ maybe [] shrink r
@@ -94,12 +95,10 @@ prop_numberOfElementsRec = testTree (nodeSizes . getMultiRangeTree) (\_ -> fst .
                                     maybe True (\((lt,leftn), (rt,rightn)) -> lt && rt && n == leftn + rightn) subs
                                 , n)
 
-labelLevels :: [l] -> Nest a b -> Nest (l,a) (l,b)
-labelLevels [] = error "need non empty list of labels to label remaining levels"
-labelLevels labels = floodF (\ls' x -> ((head ls', x), ls')) tail (id &&& id) ((,) . head) labels
+
 
 calcNodeRange :: Nest (Pointer P3) (Content Int P3) -> Nest (Int, Int) (Int, Int)
-calcNodeRange = fst . newEcho calcBranch calcLeaf . labelLevels accessors
+calcNodeRange = fst . echo calcBranch calcLeaf . labelLevels accessors
   where
     -- echo instances, store ranges at node
     dupl = id &&& id
@@ -132,7 +131,7 @@ rangesCoverTopCheck ps ranges = length realRanges == length ranges && and (zipWi
 rangesCoverRecCompute :: Tree3d -> Nest Bool Bool
 rangesCoverRecCompute = evalCoverage . calcNodeRange . getMultiRangeTree
   where
-    evalCoverage = fst . newEcho evalBranch (const (True,Nothing))
+    evalCoverage = fst . echo evalBranch (const (True,Nothing))
     evalBranch (l,u) _ subs = maybe (True, Just (l,u)) (\(leftr,rightr) -> (maybe True ((== l) . fst) leftr && maybe True ((== u) . snd) rightr, Just (l,u))) subs
 
 -- l == ll && ru == u, Just (l,u))) subs
@@ -166,7 +165,7 @@ checkCorrect = drain testInner id
   where testInner t nst subs = t && maybe True (uncurry (&&)) subs && fromMaybe True nst
 
 prop_checkRangesDisjoint :: N.NonEmpty P3 -> Bool
-prop_checkRangesDisjoint = testTree (fst . newEcho checkChildren (True,) . calcNodeRange . getMultiRangeTree) (const checkCorrect)
+prop_checkRangesDisjoint = testTree (fst . echo checkChildren (True,) . calcNodeRange . getMultiRangeTree) (const checkCorrect)
   where
     checkChildren ran _  = (,ran) . maybe True (\((lmin,lmax), (rmin,rmax)) -> lmax <= rmin)
 
