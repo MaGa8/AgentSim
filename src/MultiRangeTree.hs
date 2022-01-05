@@ -164,7 +164,7 @@ splitRange :: v -> Range (Maybe v) -> (Range (Maybe v), Range (Maybe v))
 splitRange pivot (left, right) = ((left, Just pivot), (Just pivot, right))
 
 collectPoints :: Nest Answer [(k,v)] -> [(k,v)]
-collectPoints = newDrain addBranch addLeaf
+collectPoints = drain addBranch addLeaf
   where
     addBranch _ Nothing Nothing = error "either nest or subs need to be Just"
     addBranch Disjoint _ _ = []

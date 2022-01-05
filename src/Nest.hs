@@ -8,7 +8,7 @@ module Nest
   , elimNest, mkNest, nestTree, unfoldNest, unfoldNest'
   , isFlat, isLeaf, toNest, toFlat
   , root, roots, children, nest
-  , mapNest, flood, newDrain, newEcho, zipNest
+  , mapNest, flood, floodFull, drain, echo, zipNest
   , prettyPrintNest
   ) where
 
@@ -130,110 +130,56 @@ flood :: (a -> b -> (d,a,(a,a))) -- ^ at any nested node and flat branch ignorin
       -> a -> Nest b c -> Nest d e
 flood f = floodFull f (\s x -> let (x',nsts,_) = f s x in (x',nsts)) (\s x -> let (x',_,(ls,rs)) = f s x in (x',ls,rs))
 
--- variant of flood where the wave to the nested tree and the wave to the subtrees are determined independently
-floodF :: forall a b c d e.
-          (a -> b -> (d,a)) -- ^ produce inner value from wave
-       -> (a -> a) -- ^ wave to nested tree
-       -> (a -> (a,a)) -- ^ wave to subtrees
-       -> (a -> c -> e) -- ^ produce leaf value from wave
-       -> a -> Nest b c -> Nest d e
-floodF fb fnst fsub = floodFull floodNestBranch floodNestLeaf floodFlatBranch
-  where
-    floodNestBranch w v = let (v',w') = fb w v in (v',fnst w',fsub w')
-    floodNestLeaf w v = let (v',w') = fb w v in (v',fnst w')
-    floodFlatBranch w v = let (v',w') = fb w v in uncurry (v',,) $ fsub w'
-
--- what about a monadic variant of flood?
--- use case: carry list of comparators; need: access head function and pop the head before recursing into nested tree
--- Need different monadic environments for nested tree, left and right subtree. Each is tied to the monadic value of the originating node.
--- Since the monadic value is split we can use the separated interface of floodF
-{-
-floodM :: forall a b c d e m.
-          (a -> b -> m (d,a)) -- ^ produce inner value from wave
-       -> (a -> m a) -- ^ wave to nested tree
-       -> (a -> (m a, m a)) -- ^ wave to subtrees
-       -> (a -> c -> e) -- ^ produce leaf value from wave
-       -> a -> Nest b c -> m (Nest d e)
-floodM fb fnst fsub fl x t = elimNest () () t
--}
-
-newDrain :: (a -> Maybe c -> Maybe (c,c) -> c) -> (b -> c) -> Nest a b -> c
-newDrain fb fl = elimNest (B.drain fbFlat fl) (B.drain fbNest flNest . B.mapTree reduceNest reduceNest)
+drain :: (a -> Maybe c -> Maybe (c,c) -> c) -> (b -> c) -> Nest a b -> c
+drain fb fl = elimNest (B.drain fbFlat fl) (B.drain fbNest flNest . B.mapTree reduceNest reduceNest)
   where
     fbFlat x left right = fb x Nothing (Just (left, right))
     fbNest (x,nst) left right = fb x (Just nst) (Just (left, right))
     flNest (x,nst) = fb x (Just nst) Nothing
-    reduceNest = elimNestNode (\x nst -> (x, newDrain fb fl nst))
+    reduceNest = elimNestNode (\x nst -> (x, drain fb fl nst))
 
-drainFull :: forall a b c d.
-             (a -> Either c d -> (d,d) -> d) -- ^ eliminate nested branch
-          -> (a -> Either c d -> d) -- ^ eliminate nested leaf
-          -> (a -> c -> c -> c) -- ^ eliminate flat branch
-          -> (b -> c) -- ^ eliminate leaf of flat tree
-          -> Nest a b -> Either c d
-drainFull fnb fnl ffb ffl = elimNest (Left . B.drain ffb ffl) (Right . B.drain handleNestBranch handleNestLeaf)
-  where
-    handleNestBranch :: (a,Nest a b) -> d -> d -> d
-    handleNestBranch (x,nst) cl cr = fnb x (drainFull fnb fnl ffb ffl nst) (cl,cr)
-    handleNestLeaf :: (a,Nest a b) -> d
-    handleNestLeaf (x,nst) = fnl x (drainFull fnb fnl ffb ffl nst)
-
-drain :: forall a b c.
-         (a -> Maybe c -> Maybe (c,c) -> c) -- ^ eliminate a nested branch, nested leaf or flat branch
-      -> (b -> c)  -- ^ eliminate flat leaf
-      -> Nest a b -> c
-drain f g = either id id . drainFull fnb fnl ffb g
-  where
-    fnb :: a -> Either c c -> (c,c) -> c
-    fnb x cnst csub = f x (either Just Just cnst) (Just csub)
-    fnl :: a -> Either c c -> c
-    fnl x cnst = f x (either Just Just cnst) Nothing
-    ffb :: a -> c -> c -> c
-    ffb x cl cr = f x Nothing $ Just (cl,cr)
-
-recaseDrainer :: (a -> b -> (b,b) -> c) -> (a -> b -> c) -> (a -> (b,b) -> c) -> a -> Maybe b -> Maybe (b,b) -> c
-recaseDrainer nestedBranch _ _ x (Just nst) (Just pair) = nestedBranch x nst pair
-recaseDrainer _ nestedLeaf _ x (Just nst) Nothing = nestedLeaf x nst
-recaseDrainer _ _ flatBranch x Nothing (Just pair) = flatBranch x pair
+adaptorDrainByCases :: (a -> c -> (c,c) -> c) -> (a -> c -> c) -> (a -> c -> c -> c) -> a -> Maybe c -> Maybe (c,c) -> c
+adaptorDrainByCases fInnerNest _ _ x (Just nest) (Just sub) = fInnerNest x nest sub
+adaptorDrainByCases _ fLeafNest _ x (Just nest) Nothing = fLeafNest x nest
+adaptorDrainByCases _ _ fInnerFlat x _ (Just (left, right)) = fInnerFlat x left right
 
 adaptFlatBranch :: (a -> Maybe b -> Maybe (b,b) -> c) -> a -> b -> b -> c
 adaptFlatBranch f x l r = f x Nothing (Just (l,r))
 
-newEcho :: forall a b c d e. (a -> Maybe e -> Maybe (e,e) -> (c,e))
+echo :: forall a b c d e. (a -> Maybe e -> Maybe (e,e) -> (c,e))
         -> (b -> (d,e))
         -> Nest a b -> (Nest c d, e)
-newEcho fb fl = elimNest (first Flat . B.echo (adaptFlatBranch fb) fl) (first Nest . B.echo handleNestBranch handleNestLeaf)
+echo fb fl = elimNest (first Flat . B.echo (adaptFlatBranch fb) fl) (first Nest . B.echo handleNestBranch handleNestLeaf)
   where
     handleNestBranch :: (a, Nest a b) -> e -> e -> ((c, Nest c d), e)
-    handleNestBranch (x,nst) le re = let (nst', nste) = newEcho fb fl nst in first (,nst') $ fb x (Just nste) (Just (le,re))
+    handleNestBranch (x,nst) le re = let (nst', nste) = echo fb fl nst in first (,nst') $ fb x (Just nste) (Just (le,re))
     handleNestLeaf :: (a, Nest a b) -> ((c, Nest c d), e)
-    handleNestLeaf (x,nst) = let (nst', nste) = newEcho fb fl nst in first (,nst') $ fb x (Just nste) Nothing
+    handleNestLeaf (x,nst) = let (nst', nste) = echo fb fl nst in first (,nst') $ fb x (Just nste) Nothing
 
+-- echoFull :: (a -> e -> (e,e) -> (c,e)) -- ^ echo for nested inner node
+--          -> (a -> e -> (c,e)) -- ^ echo for nested leaf
+--          -> (a -> e -> e -> (c,e)) -- ^ echo for flat inner node
+--          -> (b -> (d,e)) -- ^ echo for flat leaf
+--          -> Nest a b -> (Nest c d,e)
+-- echoFull fnb fnl ffb ffl = either id id . drainFull echoNestBranch echoNestLeaf echoFlatBranch echoFlatLeaf
+--   where
+--     echoNestBranch x nst ((l,el),(r,er)) = let (n,e) = either id id nst
+--                                            in first (\x' -> Nest $ Branch (x',n) (toNest l) (toNest r)) $ fnb x e (el,er)
+--     echoNestLeaf x nst = let (n,e) = either id id nst in first (\x' -> Nest $ Leaf (x',n)) $ fnl x e
+--     echoFlatBranch x (l,el) (r,er) = first (\x' -> Flat $ Branch x' (toFlat l) (toFlat r)) $ ffb x el er
+--     echoFlatLeaf y = first (Flat . Leaf) $ ffl y
 
-echoFull :: (a -> e -> (e,e) -> (c,e)) -- ^ echo for nested inner node
-         -> (a -> e -> (c,e)) -- ^ echo for nested leaf
-         -> (a -> e -> e -> (c,e)) -- ^ echo for flat inner node
-         -> (b -> (d,e)) -- ^ echo for flat leaf
-         -> Nest a b -> (Nest c d,e)
-echoFull fnb fnl ffb ffl = either id id . drainFull echoNestBranch echoNestLeaf echoFlatBranch echoFlatLeaf
-  where
-    echoNestBranch x nst ((l,el),(r,er)) = let (n,e) = either id id nst
-                                           in first (\x' -> Nest $ Branch (x',n) (toNest l) (toNest r)) $ fnb x e (el,er)
-    echoNestLeaf x nst = let (n,e) = either id id nst in first (\x' -> Nest $ Leaf (x',n)) $ fnl x e
-    echoFlatBranch x (l,el) (r,er) = first (\x' -> Flat $ Branch x' (toFlat l) (toFlat r)) $ ffb x el er
-    echoFlatLeaf y = first (Flat . Leaf) $ ffl y
-
--- first combine echo from subtrees then combine echo from nested tree
-echo :: (a -> e -> (c,e)) -- ^ combine value and echo from nested tree
-     -> (a -> e -> e -> (c,e)) -- ^ combine value and echoes from subtrees
-     -> (c -> e -> c -> e -> (c,e)) -- ^ integrate product from nested tree and from subtree subtrees
-     -> (b -> (d,e))
-     -> Nest a b -> (Nest c d, e)
-echo fnest fsub fint = echoFull echoNestBranch fnest fsub
-  where
-    echoNestBranch x en (el,er) = let (nx,ne) = fnest x en
-                                      (sx,se) = fsub x el er
-                                  in fint nx ne sx se
+-- -- first combine echo from subtrees then combine echo from nested tree
+-- echo :: (a -> e -> (c,e)) -- ^ combine value and echo from nested tree
+--      -> (a -> e -> e -> (c,e)) -- ^ combine value and echoes from subtrees
+--      -> (c -> e -> c -> e -> (c,e)) -- ^ integrate product from nested tree and from subtree subtrees
+--      -> (b -> (d,e))
+--      -> Nest a b -> (Nest c d, e)
+-- echo fnest fsub fint = echoFull echoNestBranch fnest fsub
+--   where
+--     echoNestBranch x en (el,er) = let (nx,ne) = fnest x en
+--                                       (sx,se) = fsub x el er
+--                                   in fint nx ne sx se
 
 mapNest :: (a -> c) -> (b -> d) -> Nest a b -> Nest c d
 mapNest f g = elimNest (Flat . B.mapTree f g) (Nest . B.mapTree mapNestBranch (bimap f (mapNest f g)))
@@ -267,20 +213,20 @@ labelNestLevels = flood labelBranch labelLeaf 0
     labelLeaf n x = (x,n)
 
 prettyPrintNest :: forall a b. (Show a,Show b) => Maybe Int -> Nest a b -> IO ()
-prettyPrintNest maxd = either ($ "") ($ "") . drainFull printNestBranch printNestLeaf printFlatBranch printFlatLeaf . labelNestLevels
+prettyPrintNest maxd = ($ "") . drain (adaptorDrainByCases printNestBranch printNestLeaf printFlatBranch) printFlatLeaf . labelNestLevels
   where
     printValuePadded x pad = putStrLn $ pad ++ show x
     -- accumulated value is String -> IO () where String argument is the padding to be applied to every line
-    printNestBranch :: (a,Int) -> Either PadShow PadShow -> (PadShow,PadShow) -> String -> IO ()
+    printNestBranch :: (a,Int) -> PadShow -> (PadShow,PadShow) -> String -> IO ()
     printNestBranch (x,n) nstio (lio,rio) pad = do
       printValuePadded x pad
-      when (maybe True (n <) maxd) $ either ($ pad ++ "^^") ($ pad ++ "^^") nstio >> putStrLn ""
+      when (maybe True (n <) maxd) $ nstio (pad ++ "^^") >> putStrLn ""
       lio $ pad ++ "Nl "
       rio $ pad ++ "Nr "
-    printNestLeaf :: (a,Int) -> Either PadShow PadShow -> String -> IO ()
+    printNestLeaf :: (a,Int) -> PadShow -> String -> IO ()
     printNestLeaf (x,n) nstio pad = do
       printValuePadded x pad
-      when (maybe True (n <) maxd) $ either ($ pad ++ "^^") ($ pad ++ "^^") nstio >> putStrLn ""
+      when (maybe True (n <) maxd) $ nstio (pad ++ "^^") >> putStrLn ""
     printFlatBranch :: (a,Int) -> PadShow -> PadShow -> String -> IO ()
     printFlatBranch (x,_) lio rio pad = do
       printValuePadded x pad
@@ -288,3 +234,9 @@ prettyPrintNest maxd = either ($ "") ($ "") . drainFull printNestBranch printNes
       rio (pad ++ "Fr ")
     printFlatLeaf :: (b,Int) -> String -> IO ()
     printFlatLeaf (x,_) = printValuePadded x
+
+prettyPrintNest' :: forall a b. (Show a,Show b) => Maybe Int -> Nest a b -> IO ()
+prettyPrintNest' maxd = ($ "") . drain printBranch printLeaf . labelNestLevels
+  where
+    printBranch = undefined -- treat cases jointly
+    printLeaf = undefined
