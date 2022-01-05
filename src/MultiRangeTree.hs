@@ -10,6 +10,12 @@ module MultiRangeTree
   , contains, disjoint, checkQuery
   , Comparator, ComparatorSeq
   , buildMultiRangeTree, query
+  -- re-export selected Nest functions
+  , module BinTree, Nest, NestNode
+  , isFlat, isLeaf
+  , root, roots, children, nest
+  , mapNest, flood, floodFull, drain, echo, zipNest
+  , prettyPrintNest
   ) where
 
 import qualified Data.List.NonEmpty as N
