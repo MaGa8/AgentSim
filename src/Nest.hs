@@ -9,7 +9,7 @@ module Nest
   , isFlat, isLeaf, toNest, toFlat
   , root, roots, children, nest
   , mapNest, flood, floodFull, drain, echo, zipNest
-  , prettyPrintNest
+  , prettyPrintNest, labelLevels
   ) where
 
 import Data.Maybe
@@ -204,39 +204,43 @@ zipNest f g (Nest t) (Nest u) = do
   nests <- join . runMaybeT $ zipTreeM (zipNest f g) (zipNest f g) (B.mapTree snd snd t) (B.mapTree snd snd u)
   Nest <$> zipTree (,) (,) values nests
 
-type PadShow = String -> IO ()
+labelLevels :: [l] -> Nest a b -> Nest (l,a) (l,b)
+labelLevels [] = error "need non empty list of labels to label remaining levels"
+labelLevels labels = flood (\ls x -> ((head ls, x), tail ls, (ls, ls))) ((,) . head) labels
 
-labelNestLevels :: Nest a b -> Nest (a,Int) (b,Int)
-labelNestLevels = flood labelBranch labelLeaf 0
-  where
-    labelBranch n x = ((x,n),n+1,(n,n))
-    labelLeaf n x = (x,n)
+-- labelNestLevels :: Nest a b -> Nest (a,Int) (b,Int)
+-- labelNestLevels = flood labelBranch labelLeaf 0
+--   where
+--     labelBranch n x = ((x,n),n+1,(n,n))
+--     labelLeaf n x = (x,n)
+
+type PadShow = String -> IO ()    
 
 prettyPrintNest :: forall a b. (Show a,Show b) => Maybe Int -> Nest a b -> IO ()
-prettyPrintNest maxd = ($ "") . drain (adaptorDrainByCases printNestBranch printNestLeaf printFlatBranch) printFlatLeaf . labelNestLevels
+prettyPrintNest maxd = ($ "") . drain (adaptorDrainByCases printNestBranch printNestLeaf printFlatBranch) printFlatLeaf . labelLevels [1 ..]
   where
     printValuePadded x pad = putStrLn $ pad ++ show x
     -- accumulated value is String -> IO () where String argument is the padding to be applied to every line
-    printNestBranch :: (a,Int) -> PadShow -> (PadShow,PadShow) -> String -> IO ()
-    printNestBranch (x,n) nstio (lio,rio) pad = do
+    printNestBranch :: (Int, a) -> PadShow -> (PadShow,PadShow) -> String -> IO ()
+    printNestBranch (n,x) nstio (lio,rio) pad = do
       printValuePadded x pad
       when (maybe True (n <) maxd) $ nstio (pad ++ "^^") >> putStrLn ""
       lio $ pad ++ "Nl "
       rio $ pad ++ "Nr "
-    printNestLeaf :: (a,Int) -> PadShow -> String -> IO ()
-    printNestLeaf (x,n) nstio pad = do
+    printNestLeaf :: (Int,a) -> PadShow -> String -> IO ()
+    printNestLeaf (n,x) nstio pad = do
       printValuePadded x pad
       when (maybe True (n <) maxd) $ nstio (pad ++ "^^") >> putStrLn ""
-    printFlatBranch :: (a,Int) -> PadShow -> PadShow -> String -> IO ()
-    printFlatBranch (x,_) lio rio pad = do
+    printFlatBranch :: (Int,a) -> PadShow -> PadShow -> String -> IO ()
+    printFlatBranch (_,x) lio rio pad = do
       printValuePadded x pad
       lio (pad ++ "Fl ")
       rio (pad ++ "Fr ")
-    printFlatLeaf :: (b,Int) -> String -> IO ()
-    printFlatLeaf (x,_) = printValuePadded x
+    printFlatLeaf :: (Int,b) -> String -> IO ()
+    printFlatLeaf (_,x) = printValuePadded x
 
 prettyPrintNest' :: forall a b. (Show a,Show b) => Maybe Int -> Nest a b -> IO ()
-prettyPrintNest' maxd = ($ "") . drain printBranch printLeaf . labelNestLevels
+prettyPrintNest' maxd = ($ "") . drain printBranch printLeaf . labelLevels [1 ..]
   where
     printBranch = undefined -- treat cases jointly
     printLeaf = undefined
