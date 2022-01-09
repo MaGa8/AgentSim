@@ -87,15 +87,17 @@ prop_numberOfElementsTop ps = testTree (calcRootSizes . getMultiRangeTree) check
 
 -- number of elements adds up everywhere in the tree
 prop_numberOfElementsRec :: N.NonEmpty P3 -> Bool
-prop_numberOfElementsRec = testTree (nodeSizes . getMultiRangeTree) (\_ -> fst . drain gatherAndCheck prepLeaf)
+prop_numberOfElementsRec = testTree numberOfElementsRecCompute (const numberOfElementsRecCheck)
+
+numberOfElementsRecCompute :: Tree3d -> Nest Int Int
+numberOfElementsRecCompute = mapNest pointerSize (N.length . contents) . getMultiRangeTree
+
+numberOfElementsRecCheck :: Nest Int Int -> Bool
+numberOfElementsRecCheck = fst . drain gatherAndCheck (True,)
   where
-    nodeSizes = mapNest pointerSize (N.length . contents)
-    prepLeaf n = (True, n)
     gatherAndCheck n nst subs = ( maybe True (\(t,nestn) -> t && n == nestn) nst &&
-                                    maybe True (\((lt,leftn), (rt,rightn)) -> lt && rt && n == leftn + rightn) subs
+                                  maybe True (\((lt,leftn), (rt,rightn)) -> lt && rt && n == leftn + rightn) subs
                                 , n)
-
-
 
 calcNodeRange :: Nest (Pointer P3) (Content Int P3) -> Nest (Int, Int) (Int, Int)
 calcNodeRange = fst . echo calcBranch calcLeaf . labelLevels accessors
