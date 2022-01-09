@@ -98,21 +98,26 @@ mkContent (_, _, top, _) = assert notEmpty Content{ contents = N.fromList $ F.to
     notEmpty = not $ null top
 
 subdivide :: Comparator v -> Size -> S.Seq (Inst k v) -> [[Inst k v]] -> BinTreeU (ComponentS k v)
-subdivide f size top bottoms = B.unfoldTree (\(size', top', bottoms') -> halveNode f size' top' bottoms') (size, top, bottoms)
+subdivide f size top bottoms = B.unfoldTree (\(size', top', bottoms') -> measureNode size' top' bottoms' >> halveNode f size' top' bottoms') (size, top, bottoms)
 
+measureNode :: Size -> S.Seq (Inst k v) -> [[Inst k v]] -> Either (ComponentS k v) ()
+measureNode _ S.Empty _ = error "node without points was erroneously created while constructing the tree"
+measureNode _ top@(point S.:<| S.Empty) bottom = Left (instval point, 1, top, bottom)
+measureNode size top bottom = Right ()
+
+-- pre: size >= 2
 -- pre: top is sorted
 -- post: order within lists persists
-halveNode :: Comparator v -> Size -> S.Seq (Inst k v) -> [[Inst k v]] -> Either (ComponentS k v) (ComponentS k v, (Size, S.Seq (Inst k v), [[Inst k v]]), (Size, S.Seq(Inst k v), [[Inst k v]]))
-halveNode f size top bottoms
-  | rightSize == 0 = Left (pivot, size, top, bottoms)
-  | f (snd leftmost) (snd rightmost) == EQ = Left (pivot, size, top, bottoms)
+halveNode :: Comparator v -> Size -> S.Seq (Inst k v) -> [[Inst k v]] -> Either (ComponentS k v) (ComponentS k v, (Size, S.Seq (Inst k v), [[Inst k v]]), (Size, S.Seq (Inst k v), [[Inst k v]]))
+halveNode f size top bottom
+  | f (instval leftmost) (instval rightmost) == EQ = assert (size >= 2) $ Left (pivot, size, top, bottom)
   | otherwise = let
-      comp = (pivot, size, top, bottoms)
-      (bottomLefts, bottomRights) = unzip $ map (cleaveByPivot f pivot) bottoms
+      comp = (pivot, size, top, bottom)
+      (bottomLefts, bottomRights) = unzip $ map (cleaveByPivot f pivot) bottom
       left = (leftSize, topLefts, bottomLefts)
       right = (rightSize, topRights, bottomRights)
       equalSized = and $ map ((length topLefts ==) . length) bottomLefts ++ map ((length topRights ==) . length) bottomRights
-      in assert equalSized $ Right (comp, left, right)
+      in Right (comp, left, right)
   where
     midpos = subtract 1 . ceiling $ size % 2
     (leftmost :< _, _ :> rightmost) = S.viewl &&& S.viewr $ top
@@ -126,6 +131,7 @@ type Chunk k v = (Size, [Inst k v])
 
 type ChunkS k v = (Size, S.Seq (Inst k v))
 
+-- pre: length pts == size >= 2
 mkEvenChunks :: Comparator v -> Size -> S.Seq (Inst k v) -> (v, ChunkS k v, ChunkS k v)
 mkEvenChunks f size pts = assert sizesAddUp (instval leftEnd, (leftChunkSize, leftHalf >< rightEquals), (rightChunkSize, rightGreaters))
   where
