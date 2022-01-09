@@ -21,6 +21,8 @@ module MultiRangeTree
 import qualified Data.List.NonEmpty as N
 import Data.List.NonEmpty(NonEmpty(..), (<|))
 import qualified Data.List as L
+import Data.Sequence(ViewL(..), ViewR(..), (><))
+import qualified Data.Sequence as S
 import Data.Bifunctor
 import Data.Maybe
 import Data.Ratio
@@ -30,7 +32,7 @@ import qualified BinTree as B
 import BinTree(BinTree(..))
 
 import Control.Applicative
-import Control.Arrow((&&&))
+import Control.Arrow((&&&), (|||))
 import Control.Exception
 
 import Debug.Trace as Dbg
@@ -60,6 +62,12 @@ data MultiRangeTree k v = MultiRangeTree{ comparators :: ComparatorSeq v, getMul
 
 type Inst k v = (k,v)
 
+instkey :: Inst k v -> k
+instkey = fst
+
+instval :: Inst k v -> v
+instval = snd
+
 cmpBySnd f (_,x) (_,y) = f x y
 
 buildMultiRangeTree :: ComparatorSeq v -> NonEmpty (Inst k v) -> MultiRangeTree k v
@@ -70,52 +78,64 @@ buildMultiRangeTree (f :| fs) points = MultiRangeTree{ comparators = f :| fs, ge
     bottoms = map (\f' -> L.sortBy (cmpBySnd f') $ N.toList points) fs
 
 buildMultiRangeTreeWorker :: [Comparator v] -> Size -> [Inst k v] -> [[Inst k v]] -> Nest (Pointer v) (Content k v)
-buildMultiRangeTreeWorker [f] n top [] = Flat . B.mapTree mkPointer mkContent $ subdivide f n top []
+buildMultiRangeTreeWorker [f] n top [] = Flat . B.mapTree mkPointer mkContent $ subdivide f n (S.fromList top) []
 buildMultiRangeTreeWorker _ _ _ [] = error "Bottoms can't be empty while there's > 1 comparator."
-buildMultiRangeTreeWorker (f : fs) n top bottoms = Nest . nestTree (expandBottom fs) $ subdivide f n top bottoms
+buildMultiRangeTreeWorker (f : fs) n top bottoms = Nest . nestTree (expandBottom fs) $ subdivide f n (S.fromList top) bottoms
 
 type BinTreeU a = BinTree a a
 
 type Component k v = (v, Size, [Inst k v], [[Inst k v]])
 
-mkPointer :: Component k v -> Pointer v
+type ComponentS k v = (v, Size, S.Seq (Inst k v), [[Inst k v]])
+
+mkPointer :: ComponentS k v -> Pointer v
 mkPointer (pivot, size, top, _) = Pointer{ pointerSize = size, pointerPivot = pivot }
 
 -- precondition: top is not empty
-mkContent :: Component k v -> Content k v
-mkContent (_, _, top, _) = assert notEmpty Content{ contents = N.fromList top }
+mkContent :: ComponentS k v -> Content k v
+mkContent (_, _, top, _) = assert notEmpty Content{ contents = N.fromList $ F.toList top }
   where
     notEmpty = not $ null top
 
-subdivide :: Comparator v -> Size -> [Inst k v] -> [[Inst k v]] -> BinTreeU (Component k v)
+subdivide :: Comparator v -> Size -> S.Seq (Inst k v) -> [[Inst k v]] -> BinTreeU (ComponentS k v)
 subdivide f size top bottoms = B.unfoldTree (\(size', top', bottoms') -> halveNode f size' top' bottoms') (size, top, bottoms)
 
-halveNode :: Comparator v -> Size -> [Inst k v] -> [[Inst k v]] -> Either (Component k v) (Component k v, (Size, [Inst k v], [[Inst k v]]), (Size, [Inst k v], [[Inst k v]]))
+-- pre: top is sorted
+-- post: order within lists persists
+halveNode :: Comparator v -> Size -> S.Seq (Inst k v) -> [[Inst k v]] -> Either (ComponentS k v) (ComponentS k v, (Size, S.Seq (Inst k v), [[Inst k v]]), (Size, S.Seq(Inst k v), [[Inst k v]]))
 halveNode f size top bottoms
   | rightSize == 0 = Left (pivot, size, top, bottoms)
-  | f leftmost rightmost == EQ = Left (pivot, size, top, bottoms)
+  | f (snd leftmost) (snd rightmost) == EQ = Left (pivot, size, top, bottoms)
   | otherwise = let
       comp = (pivot, size, top, bottoms)
+      (bottomLefts, bottomRights) = unzip $ map (cleaveByPivot f pivot) bottoms
       left = (leftSize, topLefts, bottomLefts)
       right = (rightSize, topRights, bottomRights)
-      addUp = length topLefts + length topRights == size
       equalSized = and $ map ((length topLefts ==) . length) bottomLefts ++ map ((length topRights ==) . length) bottomRights
-      in assert (addUp && equalSized) $ Right (comp, left, right)
+      in assert equalSized $ Right (comp, left, right)
   where
-    -- size = length top -- INEFFICIENT!!! Improve.
     midpos = subtract 1 . ceiling $ size % 2
-    pivot = snd $ top !! midpos -- INEFFICIENT!!! Improve.
-    (leftmost, rightmost) = (snd $ head top, snd $ last top)
-    split = (/= LT) . f pivot . snd
-    ((leftSize, topLefts), (rightSize, topRights)) = chunkByPivot f pivot top 
-    (bottomLefts, bottomRights) = unzip $ map (cleaveByPivot f pivot) bottoms
-
+    (leftmost :< _, _ :> rightmost) = S.viewl &&& S.viewr $ top
+    (pivot, (leftSize, topLefts), (rightSize, topRights)) = mkEvenChunks f size top
 
 -- | divide list into instances smaller or equal instances and greater instances
 cleaveByPivot :: Comparator v -> v -> [Inst k v] -> ([Inst k v], [Inst k v])
 cleaveByPivot f pivot = L.partition ((/= LT) . f pivot . snd)
 
 type Chunk k v = (Size, [Inst k v])
+
+type ChunkS k v = (Size, S.Seq (Inst k v))
+
+mkEvenChunks :: Comparator v -> Size -> S.Seq (Inst k v) -> (v, ChunkS k v, ChunkS k v)
+mkEvenChunks f size pts = assert sizesAddUp (instval leftEnd, (leftChunkSize, leftHalf >< rightEquals), (rightChunkSize, rightGreaters))
+  where
+    halfSize = floor $ size % 2
+    (leftHalf, rightHalf) = S.splitAt halfSize pts
+    (_ :> leftEnd) = S.viewr leftHalf
+    (rightEquals, rightGreaters) = S.spanr ((== EQ) . cmpBySnd f leftEnd) rightHalf
+    addedSize = length rightEquals
+    (leftChunkSize, rightChunkSize) = (halfSize + addedSize, size - leftChunkSize)
+    sizesAddUp = leftChunkSize + rightChunkSize == size
 
 emptyChunk :: Chunk k v
 emptyChunk = (0, [])
@@ -127,7 +147,7 @@ chunkByPivot f pivot = foldr' (\x chunks -> move chunks x . f pivot $ snd x) (em
     move ((size, left), right) x _ = ((size + 1, x : left), right)
 
 -- precondition: bottoms is non-empty
-expandBottom :: [Comparator v] -> Component k v -> (Pointer v, Nest (Pointer v) (Content k v))
+expandBottom :: [Comparator v] -> ComponentS k v -> (Pointer v, Nest (Pointer v) (Content k v))
 expandBottom _ (_, _, _, []) = error "bottom may not be empty when expanding"
 expandBottom fs (pivot, size, top, top' : bottoms) = (Pointer{ pointerSize = size, pointerPivot = pivot }, buildMultiRangeTreeWorker fs size top' bottoms)
 
