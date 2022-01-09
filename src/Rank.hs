@@ -2,7 +2,7 @@
 
 module Rank
   (
-    medianRank
+    lowerMedianRank, upperMedianRank
   , pickMedian, pickAtRank, pickApproxMedian
   , partitionByMedian, approxPartitionByMedian
   , medianOfMedians, sicilianMedian
@@ -19,7 +19,7 @@ type Rank = Int -- ^ rank is the number of elements smaller
 
 -- | Choose median exactly.
 pickMedian :: Foldable t => (a -> a -> Ordering) -> t a -> Maybe a
-pickMedian fcmp xs = medianOfMedians fcmp (length xs) (medianRank $ length xs) 5 xs
+pickMedian fcmp xs = medianOfMedians fcmp (length xs) (lowerMedianRank $ length xs) 5 xs
 
 -- | Chooses element whose rank is approximately the median.  No approximation guarantee.
 pickApproxMedian :: forall t a. Foldable t =>
@@ -40,8 +40,10 @@ partitionByMedian fcmp xs = makePartition fcmp xs <$> pickMedian fcmp xs
 approxPartitionByMedian :: Foldable t => (a -> a -> Ordering) -> t a -> Maybe (a, [a], [a])
 approxPartitionByMedian fcmp xs = makePartition fcmp xs <$> pickApproxMedian fcmp xs
 
-medianRank :: Int -> Int
-medianRank = floor . (% 2) . subtract 1
+-- | 0-based rank of the lower median element of a given number of ordered elements
+lowerMedianRank, upperMedianRank :: Int -> Int
+lowerMedianRank = floor . (% 2) . subtract 1
+upperMedianRank = ceiling . (% 2) . subtract 1
 
 partitionByPivot :: Foldable t => (a -> a -> Ordering) -> a -> t a -> (Compo a, Compo a, Compo a)
 partitionByPivot fcmp piv = foldl' categorize (emptyCompo, emptyCompo, emptyCompo)
@@ -104,7 +106,7 @@ pickMiddle xs = helper xs xs
     helper (_ : ys) (_ : _ : zs) = helper ys zs
 
 findColMedianWorker :: forall a t. (Foldable t) => (a -> a -> Ordering) -> Size -> Size -> t a -> Maybe a
-findColMedianWorker fcmp nelem chunkSize = medianOfMedians fcmp nelem' (medianRank nelem') chunkSize . mkArray . produceColMedians fcmp chunkSize
+findColMedianWorker fcmp nelem chunkSize = medianOfMedians fcmp nelem' (lowerMedianRank nelem') chunkSize . mkArray . produceColMedians fcmp chunkSize
   where
     nelem' = ceiling $ nelem % chunkSize
     mkArray :: ([a], Int) -> A.Array Int a
