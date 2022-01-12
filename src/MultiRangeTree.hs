@@ -23,6 +23,7 @@ import Data.List.NonEmpty(NonEmpty(..), (<|))
 import qualified Data.List as L
 import Data.Sequence(ViewL(..), ViewR(..), (><))
 import qualified Data.Sequence as S
+import qualified Data.DList as D
 import Data.Bifunctor
 import Data.Maybe
 import Data.Ratio
@@ -219,8 +220,9 @@ checkContent fs (query, range, Overlapping, fs') con = filter allInside . N.toLi
 splitRange :: v -> Range (Maybe v) -> (Range (Maybe v), Range (Maybe v))
 splitRange pivot (left, right) = ((left, Just pivot), (Just pivot, right))
 
-collectPoints :: Nest Answer [(k,v)] -> [(k,v)]
-collectPoints = drain addBranch addLeaf
+-- check if this is really slower
+collectPoints_old :: Nest Answer [(k,v)] -> [(k,v)]
+collectPoints_old = drain addBranch addLeaf
   where
     addBranch _ Nothing Nothing = error "either nest or subs need to be Just"
     addBranch Disjoint _ _ = []
@@ -229,6 +231,17 @@ collectPoints = drain addBranch addLeaf
     addBranch Contained (Just nests) _ = nests
     addBranch Contained Nothing (Just (lefts, rights)) = lefts ++ rights
     addLeaf pts = pts
+
+collectPoints :: Nest Answer [(k,v)] -> [(k,v)]
+collectPoints = D.toList . drain addBranch addLeaf
+  where
+    addBranch _ Nothing Nothing = error "either nest or subs need to be Just"
+    addBranch Disjoint _ _ = D.empty
+    addBranch Overlapping _ (Just (lefts, rights)) = D.append lefts rights -- inefficient!!!
+    addBranch Overlapping (Just nests) Nothing = nests
+    addBranch Contained (Just nests) _ = nests
+    addBranch Contained Nothing (Just (lefts, rights)) = D.append lefts rights
+    addLeaf pts = D.fromList pts
 
 elimAnswer :: a -> a -> a -> Answer -> a
 elimAnswer xc _ _ Contained = xc

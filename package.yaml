@@ -29,6 +29,7 @@ dependencies:
 - sdl2
 - text
 - array
+- dlist
 
 library:
   source-dirs: src
