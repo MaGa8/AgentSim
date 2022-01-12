@@ -110,7 +110,7 @@ measureNode size top bottom = Right ()
 -- post: order within lists persists
 halveNode :: Comparator v -> Size -> S.Seq (Inst k v) -> [[Inst k v]] -> Either (ComponentS k v) (ComponentS k v, (Size, S.Seq (Inst k v), [[Inst k v]]), (Size, S.Seq (Inst k v), [[Inst k v]]))
 halveNode f size top bottom
-  | f (instval leftmost) (instval rightmost) == EQ = assert (size >= 2) $ Left (pivot, size, top, bottom)
+  | cmpBySnd f leftmost rightmost == EQ = assert (size >= 2) $ Left (pivot, size, top, bottom)
   | otherwise = let
       comp = (pivot, size, top, bottom)
       (bottomLefts, bottomRights) = unzip $ map (cleaveByPivot f pivot) bottom
@@ -131,17 +131,30 @@ type Chunk k v = (Size, [Inst k v])
 
 type ChunkS k v = (Size, S.Seq (Inst k v))
 
--- pre: length pts == size >= 2
+-- pre: head pts < last pts
 mkEvenChunks :: Comparator v -> Size -> S.Seq (Inst k v) -> (v, ChunkS k v, ChunkS k v)
-mkEvenChunks f size pts = assert sizesAddUp (instval leftEnd, (leftChunkSize, leftHalf >< rightEquals), (rightChunkSize, rightGreaters))
+mkEvenChunks f size pts
+  -- special case: pivot does not divide
+  | cmpBySnd f leftEnd rightEnd == EQ = let
+      (leftChunkSize, rightChunkSize) = (halfSize - length leftEquals, size - leftChunkSize)
+      left = (leftChunkSize, leftLessers)
+      right = (rightChunkSize, leftEquals >< rightHalf)
+      sizesAddUp = leftChunkSize + rightChunkSize == size
+      in assert sizesAddUp (instval leftEqualsEnd, left, right)
+  | otherwise = let
+      (leftChunkSize, rightChunkSize) = (halfSize + length rightEquals, size - leftChunkSize)
+      left = (leftChunkSize, leftHalf >< rightEquals)
+      right = (rightChunkSize, rightGreaters)
+      sizesAddUp = leftChunkSize + rightChunkSize == size
+      in assert sizesAddUp (instval leftEnd, left, right)
   where
-    halfSize = floor $ size % 2
-    (leftHalf, rightHalf) = S.splitAt halfSize pts
-    (_ :> leftEnd) = S.viewr leftHalf
-    (rightEquals, rightGreaters) = S.spanr ((== EQ) . cmpBySnd f leftEnd) rightHalf
-    addedSize = length rightEquals
-    (leftChunkSize, rightChunkSize) = (halfSize + addedSize, size - leftChunkSize)
-    sizesAddUp = leftChunkSize + rightChunkSize == size
+    halfSize = lowerMedianRank size + 1
+    (begin :< _, _ :> end) = (S.viewl &&& S.viewr) pts
+    (leftHalf, rightHalf) = assert (cmpBySnd f begin end == LT) S.splitAt halfSize pts
+    (_ :> leftEnd, _ :> rightEnd) = (S.viewr leftHalf, S.viewr rightHalf)
+    (rightEquals, rightGreaters) = S.spanl ((== EQ) . cmpBySnd f leftEnd) rightHalf
+    (leftEquals, leftLessers) = S.spanr ((== EQ) . cmpBySnd f leftEnd) leftHalf
+    (_ :> leftEqualsEnd) = S.viewr leftLessers
 
 emptyChunk :: Chunk k v
 emptyChunk = (0, [])
