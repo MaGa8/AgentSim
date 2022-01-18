@@ -6,7 +6,7 @@ module BinTree
   , unfoldTree'
   , root, children, leaves
   , isLeaf
-  , drain, flood, floodM, echo, echoM
+  , drain, flood, floodM, echo, echoM, visit
   ) where
 
 import Data.Bifunctor
@@ -139,3 +139,17 @@ floodM fb cl cr fl w = elimTree floodBranch floodLeaf
       r' <- cr wr >>= (\wr' -> floodM fb cl cr fl wr' r)
       return $ Branch x' l' r'
     floodLeaf = fmap Leaf . fl w
+
+-- | Flood the tree and immediately drain the flooded values.
+-- Equivalent to flood followed by drain but does not construct the intermediate tree and provides choice about subtrees to visit.
+visit :: (a -> b -> (d, Maybe a, Maybe a)) -- ^ pass on the wave to subtrees of choice producing a flood value of type d
+      -> (d -> Maybe e -> Maybe e -> e) -- ^ collect the flood value and the echoes from the subtrees producing a new echo
+      -> (a -> c -> e) -- ^ produce an echo directly from the wave at leaves
+      -> a -> BinTree b c -> e
+visit fDownBranch fUpBranch fLeaf iniacc = elimTree (visitBranch fDownBranch fUpBranch fLeaf iniacc) (fLeaf iniacc)
+
+visitBranch :: (a -> b -> (d, Maybe a, Maybe a)) -> (d -> Maybe e -> Maybe e -> e) -> (a -> c -> e) -> a -> b -> BinTree b c -> BinTree b c -> e
+visitBranch fDownBranch fUpBranch fLeaf wave x left right = fUpBranch inter (echo left <$> leftWave) (echo right <$> rightWave)
+  where
+    (inter, leftWave, rightWave) = fDownBranch wave x
+    echo sub wave' = visit fDownBranch fUpBranch fLeaf wave' sub
