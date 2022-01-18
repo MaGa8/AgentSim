@@ -12,6 +12,7 @@ import Test.QuickCheck.All
 
 import qualified Data.List.NonEmpty as N
 import Data.Maybe
+import Data.Ratio
 import qualified Data.Map as M
 import BinTree
 
@@ -80,6 +81,32 @@ prop_flood nnodes = let
   valueCounts = counts . N.toList $ leaves combinationTree
   in and $ M.mapWithKey (\k c -> binoc n k == c) valueCounts
 
+-- Build tree by halving one list. Split the other, longer list according to that tree and collect the elements again. Check the original list is recovered at every node.
+prop_visit :: [Int] -> [Int] -> Bool
+prop_visit [] [] = True
+prop_visit xs ys
+  | length xs < length ys = runVisit xs ys
+  | otherwise = runVisit ys xs
+  where
+    runVisit xs' ys' = fst . visit divideFlood collectEcho (\zs -> const (True, zs)) ys' $ constructFromList xs'
+
+divideFlood :: [a] -> b -> ([a], Maybe [a], Maybe [a])
+divideFlood xs _ = (xs, leftHalf, rightHalf)
+  where
+    l = length xs
+    halfSize = floor $ l % 2
+    mdivisible = if l > 1 then Just xs else Nothing
+    (leftHalf, rightHalf) = (take halfSize <$> mdivisible, drop halfSize <$> mdivisible)
+
+collectEcho :: Eq a => [a] -> Maybe (Bool, [a]) -> Maybe (Bool, [a]) -> (Bool, [a])
+collectEcho xs mlefts mrights = (subsOkay && subsAddUp, xs)
+  where
+    subsOkay = maybe True fst mlefts && maybe True fst mrights
+    subsAddUp = let
+      mSubsAdded = (++) <$> (snd <$> mlefts) <*> (snd <$> mrights)
+      in maybe True (xs ==) mSubsAdded
+
 -- testBinTree :: IO Bool
 return []
 testBinTree = $quickCheckAll 
+
