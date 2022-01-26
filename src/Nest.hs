@@ -193,7 +193,7 @@ visit fDownNestBranch fDownNestLeaf fUpBranch fLeaf iniacc = elimNest (B.visit d
                                            in (fUpBranch y (recurse nst <$> waveNest), waveLeft, waveRight))
     upNestBranch fup left right = fup (left, right)
     nestLeaf wave = elimNestNode (\x nst -> let
-                                     (y, waveNest, _) = fDownNestBranch wave x
+                                     (y, waveNest) = fDownNestLeaf wave x
                                      in fUpBranch y (recurse nst <$> waveNest) (Nothing, Nothing))
     recurse t wave = visit fDownNestBranch fDownNestLeaf fUpBranch fLeaf wave t
     downFlatBranch wave x = let (y, _, (waveLeft, waveRight)) = fDownNestBranch wave x in (fUpBranch y Nothing, waveLeft, waveRight)
