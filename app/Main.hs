@@ -28,7 +28,7 @@ main = do
   -- positions <- getStdRandom (runState (mkPositions (0,100) (0,100) 100))
   gen <- getStdGen
   let agents = (\funs -> zipWith ($) funs [1 ..]) $ evalState (mkAgents 1 2000) gen
-  withVis (conductSim' agents 1000 30) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
+  withVis (conductSim' agents 500 30) "Messiah Game" (1200,960) (floor fieldMaxX, floor fieldMaxY)
 
 fieldMinX, fieldMinY, fieldMaxX, fieldMaxY :: Double
 fieldMinX = 0
