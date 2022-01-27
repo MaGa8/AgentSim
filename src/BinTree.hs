@@ -146,10 +146,10 @@ visit :: (a -> b -> (d, Maybe a, Maybe a)) -- ^ pass on the wave to subtrees of 
       -> (d -> Maybe e -> Maybe e -> e) -- ^ collect the flood value and the echoes from the subtrees producing a new echo
       -> (a -> c -> e) -- ^ produce an echo directly from the wave at leaves
       -> a -> BinTree b c -> e
-visit fDownBranch fUpBranch fLeaf iniacc = elimTree (visitBranch fDownBranch fUpBranch fLeaf iniacc) (fLeaf iniacc)
+visit !fDownBranch !fUpBranch !fLeaf iniacc = elimTree (visitBranch fDownBranch fUpBranch fLeaf iniacc) (fLeaf iniacc)
 
 visitBranch :: (a -> b -> (d, Maybe a, Maybe a)) -> (d -> Maybe e -> Maybe e -> e) -> (a -> c -> e) -> a -> b -> BinTree b c -> BinTree b c -> e
-visitBranch fDownBranch fUpBranch fLeaf wave x left right = fUpBranch inter (echo left <$> leftWave) (echo right <$> rightWave)
+visitBranch !fDownBranch !fUpBranch !fLeaf wave x !left !right = fUpBranch inter (echo left <$> leftWave) (echo right <$> rightWave)
   where
-    (inter, leftWave, rightWave) = fDownBranch wave x
+    (inter, !leftWave, !rightWave) = fDownBranch wave x
     echo sub wave' = visit fDownBranch fUpBranch fLeaf wave' sub

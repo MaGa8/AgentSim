@@ -1,5 +1,6 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Nest
   (
@@ -26,7 +27,7 @@ import qualified Or
 type NestNode a b = (a, Nest a b)
 
 elimNestNode :: (a -> Nest a b -> c) -> NestNode a b -> c
-elimNestNode f (x, nst) = f x nst
+elimNestNode !f (x, nst) = f x nst
 
 mkNestNode :: a -> Nest a b -> NestNode a b
 mkNestNode = (,)
@@ -185,19 +186,19 @@ echo fb fl = elimNest (first Flat . B.echo (adaptFlatBranch fb) fl) (first Nest 
 -- | A visit floods part of the tree with a visitor value of type a top-down and then collects the visitor values bottom-up by drain operations without constructing the intermediate tree.
 -- If a subtree is not explored the collect function will receive Nothing as argument for this subtree.
 visit :: (a -> b -> (d, Maybe a, (Maybe a, Maybe a))) -> (a -> b -> (d, Maybe a)) -> (d -> Maybe e -> (Maybe e, Maybe e) -> e) -> (a -> c -> e) -> a -> Nest b c -> e
-visit fDownNestBranch fDownNestLeaf fUpBranch fLeaf iniacc = elimNest (B.visit downFlatBranch upFlatBranch fLeaf iniacc) (B.visit downNestBranch upNestBranch nestLeaf iniacc)
+visit !fDownNestBranch !fDownNestLeaf !fUpBranch !fLeaf iniacc = elimNest (B.visit downFlatBranch upFlatBranch fLeaf iniacc) (B.visit downNestBranch upNestBranch nestLeaf iniacc)
   where
     -- partially applies up-function rather than use tuples
     downNestBranch wave = elimNestNode (\x nst -> let
                                            (y, waveNest, (waveLeft, waveRight)) = fDownNestBranch wave x
                                            in (fUpBranch y (recurse nst <$> waveNest), waveLeft, waveRight))
-    upNestBranch fup left right = fup (left, right)
+    upNestBranch !fup left right = fup (left, right)
     nestLeaf wave = elimNestNode (\x nst -> let
                                      (y, waveNest) = fDownNestLeaf wave x
                                      in fUpBranch y (recurse nst <$> waveNest) (Nothing, Nothing))
-    recurse t wave = visit fDownNestBranch fDownNestLeaf fUpBranch fLeaf wave t
+    recurse !t wave = visit fDownNestBranch fDownNestLeaf fUpBranch fLeaf wave t
     downFlatBranch wave x = let (y, _, (waveLeft, waveRight)) = fDownNestBranch wave x in (fUpBranch y Nothing, waveLeft, waveRight)
-    upFlatBranch fup left right = fup (left, right)                                                   
+    upFlatBranch !fup left right = fup (left, right)                                                   
 
 mapNest :: (a -> c) -> (b -> d) -> Nest a b -> Nest c d
 mapNest f g = elimNest (Flat . B.mapTree f g) (Nest . B.mapTree mapNestBranch (bimap f (mapNest f g)))

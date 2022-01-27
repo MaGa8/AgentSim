@@ -157,6 +157,11 @@ equalSizedTopBottom top = all ((length top ==) . length)
 -- | divide list into instances smaller or equal instances and greater instances
 cleaveByPivot :: Comparator v -> v -> [Inst k v] -> ([Inst k v], [Inst k v])
 cleaveByPivot f pivot = L.partition ((/= LT) . f pivot . snd)
+-- cleaveByPivot f pivot = foldr' categorize ([], [])
+--   where
+--     categorize pt (los, his) = case f pivot (snd pt) of
+--                                  LT -> (los, pt : his)
+--                                  _ -> (pt : los, his)
 
 type Chunk k v = (Size, [Inst k v])
 
@@ -207,10 +212,10 @@ type CheckPack v = (Answer, Range (Maybe v), [Comparator v])
 
 -- problem: on query ((1,2), (8,5)) does not exclude (9,5). Why?
 query :: Query v -> MultiRangeTree k v -> [(k,v)]
-query q mrt = visit (checkInnerPointer q) (checkLeafPointer q) collectBranch (selectLeaf q) (Overlapping, unbounded, fs) t
+query q mrt = F.toList $ visit (checkInnerPointer q) (checkLeafPointer q) collectBranch (\pack con -> selectLeaf q pack con) (Overlapping, unbounded, fs) t
   where
-    (t, fs) = (getMultiRangeTree &&& (N.toList . comparators)) mrt
-_
+    (!t, !fs) = (getMultiRangeTree &&& (N.toList . comparators)) mrt
+
 debugCheckRangePointer :: Show v => Query v -> CheckPack v -> Pointer v -> ((), Maybe (CheckPack v), (Maybe (CheckPack v), Maybe (CheckPack v)))
 debugCheckRangePointer q pack@(ans, range, _) ptr = Dbg.trace packStr $ checkRangePointer q pack ptr
   where
@@ -269,19 +274,21 @@ pickQueryPath ans range piv fs@(_ :| fs') = (ans, Just (Overlapping, range, fs')
                                                       in (Just (ans, leftRange, N.toList fs), Just (ans, rightRange, N.toList fs)))
 
 -- pre: left == right == Nothing \/ left = Just _ /\ right = Just _
-collectBranch :: Answer -> Maybe [(k,v)] -> (Maybe [(k,v)], Maybe [(k,v)]) -> [(k,v)]
+-- collectBranch :: Answer -> Maybe [(k,v)] -> [(k,v)] -> (Maybe [(k,v)], Maybe [(k,v)]) -> [(k,v)]
+collectBranch :: Answer -> Maybe (S.Seq (k,v)) -> (Maybe (S.Seq (k,v)), Maybe (S.Seq (k,v))) -> S.Seq (k,v)
 -- either collect from subtrees or alternatively collect from nest
-collectBranch Disjoint _ _ = []
-collectBranch _ Nothing (Nothing, _) = error "no visitor values returned even though answer is not Disjoint"
-collectBranch _ Nothing (_, Nothing) = error "no visitor values returned even though answer is not Disjoint"
-collectBranch Contained nest (left, right) = fromJust $ nest <|> (++) <$> left <*> right -- prefer going deep
-collectBranch Overlapping nest (left, right) = fromJust $ ((++) <$> left <*> right) <|> nest
+collectBranch Disjoint _ _ = S.empty
+collectBranch Contained (Just nest) _ = nest
+collectBranch Contained _ (Just !left, Just !right) = left >< right
+collectBranch Overlapping _ (Just !left, Just !right) = left >< right
+collectBranch Overlapping (Just nest) _  = nest
+collectBranch _ _ _ = error "no visitor values returned even though the answer is not Disjoint"
 
-selectLeaf :: Query v -> CheckPack v -> Content k v -> [(k,v)]
+selectLeaf :: Query v -> CheckPack v -> Content k v -> S.Seq (k,v)
 selectLeaf _ (_, _, []) _ = error "ran out of comparators when checking leaf"
 selectLeaf _ (Disjoint, _, _) _ = error "passed Disjoint on to leaf"
-selectLeaf _ (Contained, _, _) con = N.toList $ contents con
-selectLeaf q (Overlapping, _, f : _) con = filter (\(_, pt) -> contains f q (pt, pt)) . N.toList $ contents con
+selectLeaf _ (Contained, _, _) con = S.fromList . N.toList $ contents con
+selectLeaf q (Overlapping, _, f : _) con = S.fromList . filter (\(_, pt) -> contains f q (pt, pt)) . N.toList $ contents con
 
 -- later: fuse collecting and labeling?
 -- REMOVAL PENDING
