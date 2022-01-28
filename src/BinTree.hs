@@ -6,6 +6,7 @@ module BinTree
   , unfoldTree'
   , root, children, leaves
   , isLeaf
+  , BinTreeU(..)
   , drain, flood, floodM, echo, echoM, visit
   ) where
 
@@ -93,6 +94,19 @@ paths = drain addBranch ((N.:| []) . ([],))
 
 isLeaf :: BinTree a b -> Bool
 isLeaf = either (const True) (const False) . root
+
+-- | type with Functor and preorder traversal Foldable instance
+newtype BinTreeU a = BinTreeU{ unBinTreeU :: BinTree a a }
+
+instance Functor BinTreeU where
+  fmap f = BinTreeU . mapTree f f . unBinTreeU
+
+instance Foldable BinTreeU where
+  foldr f acc t = case unBinTreeU t of
+    Leaf x -> f x acc
+    Branch x left right -> let
+      (leftU, rightU) = (BinTreeU left, BinTreeU right)
+      in f x (foldr f (foldr f acc rightU) rightU)
 
 drain :: (a -> c -> c -> c) -> (b -> c) -> BinTree a b -> c
 drain fb fl = elimTree (\x lt rt -> fb x (drain fb fl lt) (drain fb fl rt)) fl
