@@ -6,7 +6,7 @@ module BinTree
   , unfoldTree'
   , root, children, leaves
   , isLeaf
-  , BinTreeU(..)
+  , BinTreeU(..), withBinTreeU
   , drain, flood, floodM, echo, echoM, visit
   ) where
 
@@ -19,7 +19,7 @@ data BinTree a b = Branch a (BinTree a b) (BinTree a b) | Leaf b deriving Show
 
 unfoldTree :: (a -> Either c (b, a, a)) -> a -> BinTree b c
 unfoldTree f = either Leaf (\(x, ol, or) -> Branch x (unfoldTree f ol) (unfoldTree f or)) . f
-
+  
 unfoldTree' :: (a -> Either c (b, a, a)) -> a -> BinTree b c
 unfoldTree' f = either Leaf (\(x, ol, or) -> let
                                 left = unfoldTree f ol
@@ -97,6 +97,9 @@ isLeaf = either (const True) (const False) . root
 
 -- | type with Functor and preorder traversal Foldable instance
 newtype BinTreeU a = BinTreeU{ unBinTreeU :: BinTree a a }
+
+withBinTreeU :: (BinTreeU a -> BinTreeU b) -> BinTree a a -> BinTree b b
+withBinTreeU f = unBinTreeU . f . BinTreeU
 
 instance Functor BinTreeU where
   fmap f = BinTreeU . mapTree f f . unBinTreeU

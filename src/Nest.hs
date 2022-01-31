@@ -114,6 +114,25 @@ children = elimNest (fmap (bimap Flat Flat) . B.children) (fmap (bimap Nest Nest
 nest :: Nest a b -> Maybe (Nest a b)
 nest = elimNest (const Nothing) (either (const Nothing) (Just . snd) . B.root)
 
+-- | adds Functor and preorder, nest-before-subtree traversal Foldable instances
+newtype NestU a = NestU{ unNestU :: Nest a a }
+
+withNestU :: (NestU a -> NestU b) -> Nest a a -> Nest b b
+withNestU f = unNestU . f . NestU
+
+asNestU :: (Nest a a -> Nest b b) -> NestU a -> NestU b
+asNestU f = NestU . f . unNestU
+
+instance Functor NestU where
+  fmap f = NestU . elimNest (Flat . B.withBinTreeU (fmap f)) (Nest . B.withBinTreeU (fmap nestf)) . unNestU
+    where
+      nestf = elimNestNode (\x nst -> mkNestNode (f x) $ withNestU (fmap f) nst)
+
+instance Foldable NestU where
+  foldr f acc = elimNest (foldr f acc . B.BinTreeU) (foldr nestf acc . B.BinTreeU) . unNestU
+    where
+      nestf (x,nst) acc' = let ffoldr = flip (foldr f) in f x $ ffoldr (NestU nst) acc'
+
 floodFull :: forall a b c d e.
              (a -> b -> (d,a,(a,a))) -- ^ at nested branch
           -> (a -> b -> (d,a)) -- ^ at nested leaf
