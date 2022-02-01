@@ -39,10 +39,10 @@ mkBinSearchTree :: [Int] -> BinTree Int (Maybe Int)
 mkBinSearchTree = unfoldTree divide
   where
     divide [] = Left Nothing
-    halve [x] = Left $ Just x
-    halve (x : xs) = let
+    divide [x] = Left $ Just x
+    divide (x : xs) = let
       (lefts, rights) = L.partition (< x) xs
-      in Right (Just x, lefts, rights)
+      in Right (x, lefts, rights)
 
 -- construct tree from list and check that echo is equal to sum over leaves
 prop_drain :: [Int] -> Bool
@@ -87,8 +87,7 @@ counts = M.map length . M.fromListWith (++) . map (\x -> (x,[x]))
 prop_fold :: [Int] -> Bool
 prop_fold ns = all (`elem` ns) ns' && all (`elem` ns') ns
   where
-    ns' = foldr collect [] . BinTreeU . mapTree Just id $ mkBinSearchTree ns
-    collect x xs = maybe xs (: xs) x
+    ns' = catMaybes . foldr (:) [] . BinTreeU . mapTree Just id $ mkBinSearchTree ns
 
 -- from node value v send (v,v+0) to the children
 -- if we split n times then the leaves are the values from 0 .. 2^n

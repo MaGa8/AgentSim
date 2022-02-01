@@ -109,7 +109,8 @@ instance Foldable BinTreeU where
     Leaf x -> f x acc
     Branch x left right -> let
       (leftU, rightU) = (BinTreeU left, BinTreeU right)
-      in f x (foldr f (foldr f acc rightU) rightU)
+      ffoldr = flip (foldr f)
+      in f x . ffoldr leftU $ ffoldr rightU acc
 
 drain :: (a -> c -> c -> c) -> (b -> c) -> BinTree a b -> c
 drain fb fl = elimTree (\x lt rt -> fb x (drain fb fl lt) (drain fb fl rt)) fl
