@@ -21,6 +21,9 @@ cradle:
     - path: "./profile/MedianFind.hs"
       component: "AgentSim:exe:profile-mrt-construction"
 
+    - path: "./profile/TreeCollection.hs"
+      component: "AgentSim:exe:profile-tree-collect"
+
     - path: "./profile/Paths_AgentSim.hs"
       component: "AgentSim:exe:profile-mrt-construction"
 
