@@ -140,8 +140,9 @@ echoM fb fl = drain echoBranch echoLeaf
 
 flood :: (a -> b -> (d, a, a)) -> (a -> c -> e) -> a -> BinTree b c -> BinTree d e
 flood fb fl o = elimTree floodBranch (Leaf . fl o)
-  where floodBranch x lt rt = Branch x' (flood fb fl ol lt) (flood fb fl or rt)
-          where (x', ol, or) = fb o x
+  where floodBranch x lt rt = let
+          (x', ol, or) = fb o x
+          in Branch x' (flood fb fl ol lt) (flood fb fl or rt)
 
 floodM :: Monad m =>
            (a -> b -> m (d,a,a)) -- ^ process wave for branch case producing a new value at two split waves
@@ -171,3 +172,11 @@ visitBranch !fDownBranch !fUpBranch !fLeaf wave x !left !right = fUpBranch inter
   where
     (inter, !leftWave, !rightWave) = fDownBranch wave x
     echo sub wave' = visit fDownBranch fUpBranch fLeaf wave' sub
+
+-- | turn inner nodes into leaves
+trim :: (a -> Either b a -> Either b a -> Maybe b) -> BinTree a b -> BinTree a b
+trim f = elimTree try Leaf
+  where
+    try x left right = let
+      (leftx, rightx) = (root left, root right)
+      in maybe (Branch x (trim f left) (trim f right)) Leaf $ f x leftx rightx
