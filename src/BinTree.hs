@@ -7,7 +7,7 @@ module BinTree
   , root, children, leaves
   , isLeaf
   , BinTreeU(..), withBinTreeU
-  , drain, flood, floodM, echo, echoM, visit
+  , drain, flood, floodM, echo, echoM, trim, visit
   ) where
 
 import Data.Bifunctor

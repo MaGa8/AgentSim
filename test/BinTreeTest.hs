@@ -16,9 +16,11 @@ import Data.Maybe
 import Data.Ratio
 import qualified Data.Map as M
 import Data.Bifunctor
-import BinTree
 
 import Control.Arrow((&&&))
+
+import BinTree
+
 
 -- test construction: produce tree by splitting list in half recursively
 -- check that leaves contain list elements
@@ -97,6 +99,23 @@ prop_flood nnodes = let
   combinationTree = flood (\x _ -> (x,x,x+1)) const 0 $ constructHeightTree n
   valueCounts = counts . N.toList $ leaves combinationTree
   in and $ M.mapWithKey (\k c -> binoc n k == c) valueCounts
+
+-- Build a BST.  Trim all nodes below primes.  Verify only the numbers below prime numbers are missing.
+prop_trim :: [Int] -> Bool
+prop_trim xs = isEqualSet (catMaybes numbersUntrimmed) numbersTrimmed
+  where
+    numbersUntrimmed = drain (\x lefts rights -> Just x : if isPrime x then [] else lefts ++ rights) return bst
+    numbersTrimmed = drain (\x lefts rights -> x : lefts ++ rights) (maybe [] return) trimmed
+    trimmed = trim (\x _ _ -> if isPrime x then Just (Just x) else Nothing) bst
+    bst = mkBinSearchTree xs
+
+isEqualSet :: (Eq a, Foldable t) => t a -> t a -> Bool
+isEqualSet xs ys = all (`elem` ys) xs && all (`elem` xs) ys
+
+isPrime :: Int -> Bool
+isPrime n = not $ any ((== 0) . rem n) [2 .. upper]
+  where
+    upper = floor . sqrt $ fromIntegral n
 
 -- Build tree by halving one list. Split the other, longer list according to that tree and collect the elements again. Check the original list is recovered at every node.
 prop_visit :: [Int] -> [Int] -> Bool
