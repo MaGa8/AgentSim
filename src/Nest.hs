@@ -9,6 +9,7 @@ module Nest
   , elimNest, mkNest, nestTree, unfoldNest, unfoldNest'
   , isFlat, isLeaf, toNest, toFlat
   , root, roots, children, nest
+  , NestU(..), asNestU, withNestU
   , mapNest, flood, floodFull, drain, echo, visit, zipNest
   , prettyPrintNest, labelLevels
   ) where
@@ -28,6 +29,12 @@ type NestNode a b = (a, Nest a b)
 
 elimNestNode :: (a -> Nest a b -> c) -> NestNode a b -> c
 elimNestNode !f (x, nst) = f x nst
+
+getNestValue :: NestNode a b -> a
+getNestValue = elimNestNode const
+
+getNestTree :: NestNode a b -> Nest a b
+getNestTree = elimNestNode (\_ nst -> nst)
 
 mkNestNode :: a -> Nest a b -> NestNode a b
 mkNestNode = (,)
@@ -85,7 +92,7 @@ unfoldNest' p fn ff = either (Flat !. B.unfoldTree' ff) (Nest !. B.unfoldTree' n
     nestedUnfolding s = let
       (v,ns,inner) = fn s
       nst = unfoldNest' p fn ff ns
-      in v `seq` nst `seq` maybe (Left (v,nst)) (\(ls,rs) -> Right ((v,nst),ls,rs)) inner      
+      in v `seq` nst `seq` maybe (Left (v,nst)) (\(ls,rs) -> Right ((v,nst),ls,rs)) inner
 
 isFlat :: Nest a b -> Bool
 isFlat = elimNest (const True) (const False)
@@ -113,6 +120,16 @@ children = elimNest (fmap (bimap Flat Flat) . B.children) (fmap (bimap Nest Nest
 
 nest :: Nest a b -> Maybe (Nest a b)
 nest = elimNest (const Nothing) (either (const Nothing) (Just . snd) . B.root)
+
+-- | cut off children at the current level, nesting is unaffected
+trim :: (a -> Either b a -> (a, a) -> Maybe a) -- ^ decision in Nest: return Just to cut
+     -> (a -> Either b a -> Either b a -> Maybe b) -- ^ decision in Flat: return Just to cut
+     -> Nest a b -> Nest a b
+trim fnest fflat = elimNest (Flat . B.trim fflat) (Nest . B.trim cutNest)
+  where
+    cutNest node left right = let
+      getSubVal = either getNestValue getNestValue
+      in elimNestNode (\x nst -> (`mkNestNode` trim fnest fflat nst) <$> fnest x (root nst) (getSubVal left, getSubVal right)) node
 
 -- | adds Functor and preorder, nest-before-subtree traversal Foldable instances
 newtype NestU a = NestU{ unNestU :: Nest a a }
@@ -217,7 +234,7 @@ visit !fDownNestBranch !fDownNestLeaf !fUpBranch !fLeaf iniacc = elimNest (B.vis
                                      in fUpBranch y (recurse nst <$> waveNest) (Nothing, Nothing))
     recurse !t wave = visit fDownNestBranch fDownNestLeaf fUpBranch fLeaf wave t
     downFlatBranch wave x = let (y, _, (waveLeft, waveRight)) = fDownNestBranch wave x in (fUpBranch y Nothing, waveLeft, waveRight)
-    upFlatBranch !fup left right = fup (left, right)                                                   
+    upFlatBranch !fup left right = fup (left, right)
 
 mapNest :: (a -> c) -> (b -> d) -> Nest a b -> Nest c d
 mapNest f g = elimNest (Flat . B.mapTree f g) (Nest . B.mapTree mapNestBranch (bimap f (mapNest f g)))
@@ -252,7 +269,7 @@ labelLevels labels = flood (\ls x -> ((head ls, x), tail ls, (ls, ls))) ((,) . h
 --     labelBranch n x = ((x,n),n+1,(n,n))
 --     labelLeaf n x = (x,n)
 
-type PadShow = String -> IO ()    
+type PadShow = String -> IO ()
 
 prettyPrintNest :: forall a b. (Show a,Show b) => Maybe Int -> Nest a b -> IO ()
 prettyPrintNest maxd = ($ "") . drain (adaptorDrainByCases printNestBranch printNestLeaf printFlatBranch) printFlatLeaf . labelLevels [1 ..]
