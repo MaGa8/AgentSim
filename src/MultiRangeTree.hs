@@ -43,6 +43,7 @@ import Nest
 
 type Size = Int
 type Range v = (v,v)
+type OpenRange v = Range (Maybe v)
 
 mkRange :: v -> v -> Range v
 mkRange lower upper = (lower, upper)
@@ -208,11 +209,73 @@ expandBottom fs (pivot, size, top, top' : bottoms) = (Pointer{ pointerSize = siz
 
 type Query v = (v,v)
 
+query :: Query v -> MultiRangeTree k v -> [(k,v)]
+query q mrt = collectRanges . cutDisjoint $ markRanges fs q t
+  where
+    (fs, t) = (comparators mrt, getMultiRangeTree mrt)
+
+type Marker v = (Answer, [Comparator v], OpenRange v, Bool)
+
+lowerMarker :: Bool -> Marker v -> Marker v
+lowerMarker need (_, fs, _, _) = (Overlapping, tail fs, unbounded, need)
+
+turnMarker :: Answer -> OpenRange v -> Bool -> Marker v -> Marker v
+turnMarker ans range need (_, fs,  _, _) = (ans, fs, range, need)
+
+markRanges :: ComparatorSeq v -> Query v -> Nest (Pointer v) (Content k v) -> Nest Bool [(k,v)]
+markRanges fs q = floodFull markInnerNest markLeafNest markInnerFlat markLeafFlat (Overlapping, N.toList fs, unbounded, True)
+  where
+    markInnerNest mark@(ans, fs', range, need) ptr = let
+      ans' = calcAnswer fs' ans q range
+      (leftRange, rightRange) = divide (Just $ pointerPivot ptr) range
+      in ( need && ans' /= Disjoint -- collect if it is not disjoint and needed by parent
+         , lowerMarker (need && ans' == Contained) mark -- collect if contained
+         , (turnMarker ans' leftRange (need && ans' == Overlapping) mark, turnMarker ans' rightRange (need && ans' == Overlapping) mark) -- collect if overlapping
+         )
+    markLeafNest mark@(ans, fs', range, need) ptr = let
+      ans' = calcAnswer fs' ans q range
+      in ( need && ans' /= Disjoint
+         , lowerMarker (need && ans' /= Disjoint) mark
+         )
+    markInnerFlat mark@(ans, fs', range, need) ptr = let
+      ans' = calcAnswer fs' ans q range
+      (leftRange, rightRange) = divide (Just $ pointerPivot ptr) range
+      in ( need && ans' /= Disjoint
+         , turnMarker ans' leftRange (need && ans' /= Disjoint) mark
+         , turnMarker ans' rightRange (need && ans' /= Disjoint) mark
+         )
+    markLeafFlat (ans, fs', range, True) con = case calcAnswer fs' ans q range of
+      Disjoint -> []
+      Contained -> N.toList $ contents con
+      Overlapping -> filter (inside (head fs') q . snd) . N.toList $ contents con
+    markLeafFlat (_, _, _, False) _ = []
+
+-- | pre: list of comparators is not empty
+calcAnswer :: [Comparator v] -> Answer -> Query v -> OpenRange v -> Answer
+calcAnswer _ Contained _ _ = Contained
+calcAnswer _ Disjoint _ _ = Disjoint
+calcAnswer (f : fs) Overlapping q range = checkQuery f q range
+
+-- | removes that are disjoint from the query
+cutDisjoint :: Nest Bool [(k,v)] -> Nest Bool [(k,v)]
+cutDisjoint = trim cutNest cutFlat
+  where
+    cutNest False _ _ = Just False
+    cutNest _ _ _ = Nothing
+    cutFlat False _ _ = Just []
+    cutFlat _ _ _ = Nothing
+
+-- | collects all lists
+collectRanges :: Nest a [(k,v)] -> [(k,v)]
+collectRanges = foldr collect [] . NestU . mapNest Left Right
+  where
+    collect val pts = either (const pts) (++ pts) val
+
 type CheckPack v = (Answer, Range (Maybe v), [Comparator v])
 
 -- problem: on query ((1,2), (8,5)) does not exclude (9,5). Why?
-query :: Query v -> MultiRangeTree k v -> [(k,v)]
-query q mrt = F.toList $ visit (checkInnerPointer q) (checkLeafPointer q) collectBranch (\pack con -> selectLeaf q pack con) (Overlapping, unbounded, fs) t
+queryFuse :: Query v -> MultiRangeTree k v -> [(k,v)]
+queryFuse q mrt = F.toList $ visit (checkInnerPointer q) (checkLeafPointer q) collectBranch (\pack con -> selectLeaf q pack con) (Overlapping, unbounded, fs) t
   where
     (!t, !fs) = (getMultiRangeTree &&& (N.toList . comparators)) mrt
 
@@ -279,8 +342,8 @@ collectBranch :: Answer -> Maybe (S.Seq (k,v)) -> (Maybe (S.Seq (k,v)), Maybe (S
 -- either collect from subtrees or alternatively collect from nest
 collectBranch Disjoint _ _ = S.empty
 collectBranch Contained (Just nest) _ = nest
-collectBranch Contained _ (Just !left, Just !right) = left >< right
-collectBranch Overlapping _ (Just !left, Just !right) = left >< right
+collectBranch Contained _ (Just left, Just right) = left >< right
+collectBranch Overlapping _ (Just left, Just right) = left >< right
 collectBranch Overlapping (Just nest) _  = nest
 collectBranch _ _ _ = error "no visitor values returned even though the answer is not Disjoint"
 

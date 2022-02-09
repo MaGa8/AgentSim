@@ -8,7 +8,7 @@ module Nest
   , NestNode, elimNestNode, mkNestNode
   , elimNest, mkNest, nestTree, unfoldNest, unfoldNest'
   , isFlat, isLeaf, toNest, toFlat
-  , root, roots, children, nest
+  , root, roots, children, nest, trim
   , NestU(..), asNestU, withNestU
   , mapNest, flood, floodFull, drain, echo, visit, zipNest
   , prettyPrintNest, labelLevels
