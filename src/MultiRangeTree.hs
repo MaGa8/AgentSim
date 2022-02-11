@@ -222,6 +222,7 @@ lowerMarker need (_, fs, _, _) = (Overlapping, tail fs, unbounded, need)
 turnMarker :: Answer -> OpenRange v -> Bool -> Marker v -> Marker v
 turnMarker ans range need (_, fs,  _, _) = (ans, fs, range, need)
 
+-- this function eats nearly 60% of total time!
 markRanges :: ComparatorSeq v -> Query v -> Nest (Pointer v) (Content k v) -> Nest Bool [(k,v)]
 markRanges fs q = floodFull markInnerNest markLeafNest markInnerFlat markLeafFlat (Overlapping, N.toList fs, unbounded, True)
   where
@@ -233,9 +234,10 @@ markRanges fs q = floodFull markInnerNest markLeafNest markInnerFlat markLeafFla
          , (turnMarker ans' leftRange (need && ans' == Overlapping) mark, turnMarker ans' rightRange (need && ans' == Overlapping) mark) -- collect if overlapping
          )
     markLeafNest mark@(ans, fs', range, need) ptr = let
-      ans' = calcAnswer fs' ans q range
-      in ( need && ans' /= Disjoint
-         , lowerMarker (need && ans' /= Disjoint) mark
+      piv = pointerPivot ptr
+      ans' = calcAnswer fs' ans q (Just piv, Just piv) -- leaf holds identical values -> tighten check
+      in ( need && ans' == Contained    -- point value may not be overlapping
+         , lowerMarker (need && ans' == Contained) mark
          )
     markInnerFlat mark@(ans, fs', range, need) ptr = let
       ans' = calcAnswer fs' ans q range
