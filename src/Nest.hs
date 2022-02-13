@@ -125,11 +125,13 @@ nest = elimNest (const Nothing) (either (const Nothing) (Just . snd) . B.root)
 trim :: (a -> Either b a -> (a, a) -> Maybe a) -- ^ decision in Nest: return Just to cut
      -> (a -> Either b a -> Either b a -> Maybe b) -- ^ decision in Flat: return Just to cut
      -> Nest a b -> Nest a b
-trim fnest fflat = elimNest (Flat . B.trim fflat) (Nest . B.trim cutNest)
+trim fnest fflat = elimNest (Flat . B.trim fflat) (Nest . nestTree recurseNest . B.trim cutTop)
   where
-    cutNest node left right = let
-      getSubVal = either getNestValue getNestValue
-      in elimNestNode (\x nst -> (`mkNestNode` trim fnest fflat nst) <$> fnest x (root nst) (getSubVal left, getSubVal right)) node
+    cutTop node left right = elimNestNode (\x nst -> let
+                                              getSubx = either fst fst
+                                              (leftx, rightx, nstx) = (getSubx left, getSubx right, root nst)
+                                              in (,nst) <$> fnest x nstx (leftx, rightx)) node
+    recurseNest (x, nst) = (x, trim fnest fflat nst)
 
 -- | adds Functor and preorder, nest-before-subtree traversal Foldable instances
 newtype NestU a = NestU{ unNestU :: Nest a a }

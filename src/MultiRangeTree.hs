@@ -263,9 +263,9 @@ cutDisjoint :: Nest Bool [(k,v)] -> Nest Bool [(k,v)]
 cutDisjoint = trim cutNest cutFlat
   where
     cutNest False _ _ = Just False
-    cutNest _ _ _ = Nothing
+    cutNest True _ _ = Nothing
     cutFlat False _ _ = Just []
-    cutFlat _ _ _ = Nothing
+    cutFlat True _ _ = Nothing
 
 -- | collects all lists
 collectRanges :: Nest a [(k,v)] -> [(k,v)]
