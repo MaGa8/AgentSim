@@ -74,6 +74,7 @@ isEmpty f (lower, upper) = f lower upper == GT
 
 data Pointer a = Pointer{ pointerSize :: Size -- ^ number of points assigned to subtree
                         , pointerPivot :: !a -- ^ greatest value in the left subtree
+                        , pointerRange :: OpenRange a
                         } deriving Show
 
 newtype Content k v = Content{ contents :: NonEmpty (k,v) } deriving Show
@@ -107,45 +108,45 @@ buildMultiRangeTree (f :| fs) points = MultiRangeTree{ comparators = f :| fs, ge
     bottoms = map (\f' -> L.sortBy (cmpBySnd f') $ N.toList points) fs
 
 buildMultiRangeTreeWorker :: [Comparator v] -> Size -> [Inst k v] -> [[Inst k v]] -> Nest (Pointer v) (Content k v)
-buildMultiRangeTreeWorker [f] n !top [] = Flat . B.mapTree mkPointer mkContent $ subdivide f n (S.fromList top) []
+buildMultiRangeTreeWorker [f] n !top [] = Flat . B.mapTree mkPointer mkContent $ subdivide f n unbounded (S.fromList top) []
 buildMultiRangeTreeWorker _ _ _ [] = error "Bottoms can't be empty while there's > 1 comparator."
-buildMultiRangeTreeWorker (f : fs) n !top bottoms = Nest . nestTree (expandBottom fs) $ subdivide f n (S.fromList top) bottoms
+buildMultiRangeTreeWorker (f : fs) n !top bottoms = Nest . nestTree (expandBottom fs) $ subdivide f n unbounded (S.fromList top) bottoms
 
 type BinTreeU a = BinTree a a
 
-type Component k v = (v, Size, [Inst k v], [[Inst k v]])
+type Component k v = (v, Size, OpenRange v, S.Seq (Inst k v), [[Inst k v]])
 
-type ComponentS k v = (v, Size, S.Seq (Inst k v), [[Inst k v]])
-
-mkPointer :: ComponentS k v -> Pointer v
-mkPointer (pivot, size, top, _) = Pointer{ pointerSize = size, pointerPivot = pivot }
+mkPointer :: Component k v -> Pointer v
+mkPointer (pivot, size, range, top, _) = Pointer{ pointerSize = size, pointerPivot = pivot, pointerRange = range }
 
 -- precondition: top is not empty
-mkContent :: ComponentS k v -> Content k v
-mkContent (_, _, top, _) = assert notEmpty Content{ contents = N.fromList $ F.toList top }
+mkContent :: Component k v -> Content k v
+mkContent (_, _, _, top, _) = assert notEmpty Content{ contents = N.fromList $ F.toList top }
   where
     notEmpty = not $ null top
 
-subdivide :: Comparator v -> Size -> S.Seq (Inst k v) -> [[Inst k v]] -> BinTreeU (ComponentS k v)
-subdivide f size top bottoms = B.unfoldTree (\(size', top', bottoms') -> measureNode size' top' bottoms' >> halveNode f size' top' bottoms') (size, top, bottoms)
+subdivide :: Comparator v -> Size -> OpenRange v -> S.Seq (Inst k v) -> [[Inst k v]] -> BinTreeU (Component k v)
+subdivide f size range top bottoms = B.unfoldTree (\(size', range', top', bottoms') -> measureNode size' range' top' bottoms' >> halveNode f size' range' top' bottoms') (size, range, top, bottoms)
 
-measureNode :: Size -> S.Seq (Inst k v) -> [[Inst k v]] -> Either (ComponentS k v) ()
-measureNode _ S.Empty _ = error "node without points was erroneously created while constructing the tree"
-measureNode _ top@(point S.:<| S.Empty) bottom = Left (instval point, 1, top, bottom)
-measureNode size top bottom = Right ()
+measureNode :: Size -> OpenRange v -> S.Seq (Inst k v) -> [[Inst k v]] -> Either (Component k v) ()
+measureNode _ _ S.Empty _ = error "node without points was erroneously created while constructing the tree"
+measureNode _ range top@(point S.:<| S.Empty) bottom = Left (instval point, 1, range, top, bottom)
+measureNode size _ top bottom = Right ()
 
 -- pre: size >= 2
 -- pre: top is sorted
 -- post: order within lists persists
-halveNode :: Comparator v -> Size -> S.Seq (Inst k v) -> [[Inst k v]] -> Either (ComponentS k v) (ComponentS k v, (Size, S.Seq (Inst k v), [[Inst k v]]), (Size, S.Seq (Inst k v), [[Inst k v]]))
-halveNode f size top bottom
-  | cmpBySnd f leftmost rightmost == EQ = assert (size >= 2) $ Left (instval leftmost, size, top, bottom)
+halveNode :: Comparator v -> Size -> OpenRange v -> S.Seq (Inst k v) -> [[Inst k v]]
+          -> Either (Component k v) (Component k v, (Size, OpenRange v, S.Seq (Inst k v), [[Inst k v]]), (Size, OpenRange v, S.Seq (Inst k v), [[Inst k v]]))
+halveNode f size range top bottom
+  | cmpBySnd f leftmost rightmost == EQ = assert (size >= 2) $ Left (instval leftmost, size, range, top, bottom)
   | otherwise = let
       (pivot, (leftSize, topLefts), (rightSize, topRights)) = mkEvenChunks f size top
-      comp = (pivot, size, top, bottom)
+      comp = (pivot, size, range, top, bottom)
       (bottomLefts, bottomRights) = unzip $ map (cleaveByPivot f pivot) bottom
-      left = (leftSize, topLefts, bottomLefts)
-      right = (rightSize, topRights, bottomRights)
+      (leftRange, rightRange) = divide (Just pivot) range
+      left = (leftSize, leftRange, topLefts, bottomLefts)
+      right = (rightSize, rightRange, topRights, bottomRights)
       equalSized = equalSizedTopBottom topLefts bottomLefts && equalSizedTopBottom topRights bottomRights
       in assert equalSized Right (comp, left, right)
   where
@@ -203,54 +204,84 @@ chunkByPivot f pivot = foldr' (\x chunks -> move chunks x . f pivot $ snd x) (em
     move ((size, left), right) x _ = ((size + 1, x : left), right)
 
 -- precondition: bottoms is non-empty
-expandBottom :: [Comparator v] -> ComponentS k v -> (Pointer v, Nest (Pointer v) (Content k v))
-expandBottom _ (_, _, _, []) = error "bottom may not be empty when expanding"
-expandBottom fs (pivot, size, top, top' : bottoms) = (Pointer{ pointerSize = size, pointerPivot = pivot }, buildMultiRangeTreeWorker fs size top' bottoms)
+expandBottom :: [Comparator v] -> Component k v -> (Pointer v, Nest (Pointer v) (Content k v))
+expandBottom _ (_, _, _, _,[]) = error "bottom may not be empty when expanding"
+expandBottom fs (pivot, size, range, top, top' : bottoms) = (Pointer{ pointerSize = size, pointerPivot = pivot, pointerRange = range }, buildMultiRangeTreeWorker fs size top' bottoms)
 
 type Query v = (v,v)
 
-query :: Query v -> MultiRangeTree k v -> [(k,v)]
-query q mrt = collectRanges . cutDisjoint $ markRanges fs q t
+query = queryOld
+
+queryFold :: Query v -> MultiRangeTree k v -> [(k,v)]
+queryFold q mrt = collectRanges . cutDisjoint $ markRanges fs q t
   where
     (fs, t) = (comparators mrt, getMultiRangeTree mrt)
 
-type Marker v = (Answer, [Comparator v], OpenRange v, Bool)
+type Marker v = Maybe (Answer, [Comparator v], OpenRange v)
 
-lowerMarker :: Bool -> Marker v -> Marker v
-lowerMarker need (_, fs, _, _) = (Overlapping, tail fs, unbounded, need)
+-- Compute result depending on marker.  Recalculate only in the Overlapping case.
+procMarker :: a -> ([Comparator v] -> OpenRange v -> a) -> ([Comparator v] -> OpenRange v -> a) -> Query v -> Marker v -> a
+procMarker  valDisjoint _ _ _ Nothing = valDisjoint
+procMarker _ fContained _ _ (Just (Contained, fs, ran)) = fContained fs ran
+procMarker valDisjoint fContained fOverlap q (Just (Overlapping, fs, ran)) = case checkQuery (head fs) q ran of
+  Disjoint -> valDisjoint
+  Contained -> fContained fs ran
+  Overlapping -> fOverlap fs ran
 
-turnMarker :: Answer -> OpenRange v -> Bool -> Marker v -> Marker v
-turnMarker ans range need (_, fs,  _, _) = (ans, fs, range, need)
+lowerMarker :: [Comparator v] -> Marker v
+lowerMarker (_ : fs) = Just (Overlapping, fs, unbounded)
+
+-- split ranges if the range is overlapping
+splitMarker :: [Comparator v] -> OpenRange v -> Pointer v -> (Marker v, Marker v)
+splitMarker fs ran ptr = let
+  (leftRange, rightRange) = divide (Just $ pointerPivot ptr) ran
+  in (Just (Overlapping, fs, leftRange), Just (Overlapping, fs, rightRange))
+
+-- send the same range if the range is contained
+relayMarker :: [Comparator v] -> OpenRange v -> (Marker v, Marker v)
+relayMarker fs ran = (Just (Contained, fs, ran), Just (Contained, fs, ran))
+
+narrowMarker :: Maybe v -> Marker v -> Marker v
+narrowMarker p = fmap (\(ans, fs, _) -> (ans, fs, (p,p)))
 
 -- this function eats nearly 60% of total time!
 markRanges :: ComparatorSeq v -> Query v -> Nest (Pointer v) (Content k v) -> Nest Bool [(k,v)]
-markRanges fs q = floodFull markInnerNest markLeafNest markInnerFlat markLeafFlat (Overlapping, N.toList fs, unbounded, True)
+markRanges fs q = floodFull markInnerNest markLeafNest markInnerFlat markLeafFlat $ Just (Overlapping, N.toList fs, unbounded)
   where
-    markInnerNest mark@(ans, fs', range, need) ptr = let
-      ans' = calcAnswer fs' ans q range
-      (leftRange, rightRange) = divide (Just $ pointerPivot ptr) range
-      in ( need && ans' /= Disjoint -- collect if it is not disjoint and needed by parent
-         , lowerMarker (need && ans' == Contained) mark -- collect if contained
-         , (turnMarker ans' leftRange (need && ans' == Overlapping) mark, turnMarker ans' rightRange (need && ans' == Overlapping) mark) -- collect if overlapping
-         )
-    markLeafNest mark@(ans, fs', range, need) ptr = let
-      piv = pointerPivot ptr
-      ans' = calcAnswer fs' ans q (Just piv, Just piv) -- leaf holds identical values -> tighten check
-      in ( need && ans' == Contained    -- point value may not be overlapping
-         , lowerMarker (need && ans' == Contained) mark
-         )
-    markInnerFlat mark@(ans, fs', range, need) ptr = let
-      ans' = calcAnswer fs' ans q range
-      (leftRange, rightRange) = divide (Just $ pointerPivot ptr) range
-      in ( need && ans' /= Disjoint
-         , turnMarker ans' leftRange (need && ans' /= Disjoint) mark
-         , turnMarker ans' rightRange (need && ans' /= Disjoint) mark
-         )
-    markLeafFlat (ans, fs', range, True) con = case calcAnswer fs' ans q range of
-      Disjoint -> []
-      Contained -> N.toList $ contents con
-      Overlapping -> filter (inside (head fs') q . snd) . N.toList $ contents con
-    markLeafFlat (_, _, _, False) _ = []
+    markInnerNest mark ptr = procMarker (False, Nothing, (Nothing, Nothing)) (\fs' _ -> (True, lowerMarker fs', (Nothing, Nothing))) (\fs' ran -> (True, Nothing, splitMarker fs' ran ptr)) q mark
+    -- markInnerNest mark@(ans, fs', range, need) ptr = let
+    --   ans' = calcAnswer fs' ans q range
+    --   (leftRange, rightRange) = divide (Just $ pointerPivot ptr) range
+    --   in ( need && ans' /= Disjoint -- collect if it is not disjoint and needed by parent
+    --      , lowerMarker (need && ans' == Contained) mark -- collect if contained
+    --      , (turnMarker ans' leftRange (need && ans' == Overlapping) mark, turnMarker ans' rightRange (need && ans' == Overlapping) mark) -- collect if overlapping
+    --      )
+    -- leaf holds identical values -> tighten check
+    markLeafNest mark ptr = procMarker (False, Nothing) (\fs' _ -> (True, lowerMarker fs')) (\fs' ran -> (True, lowerMarker fs')) q $ narrowMarker (Just $ pointerPivot ptr) mark
+    -- markLeafNest mark@(ans, fs', range, need) ptr = let
+    --   piv = pointerPivot ptr
+    --   ans' = calcAnswer fs' ans q (Just piv, Just piv) -- leaf holds identical values -> tighten check
+    --   in ( need && ans' == Contained    -- point value may not be overlapping
+    --      , lowerMarker (need && ans' == Contained) mark
+    --      )
+    markInnerFlat mark ptr = let
+      disjointValue = (False, Nothing, Nothing)
+      fcontained fs' ran = let mark' = Just (Contained, fs', ran) in (True, mark', mark')
+      foverlap fs' ran = uncurry (True,,) $ splitMarker fs' ran  ptr
+      in procMarker disjointValue fcontained foverlap q mark
+    -- markInnerFlat mark@(ans, fs', range, need) ptr = let
+    --   ans' = calcAnswer fs' ans q range
+    --   (leftRange, rightRange) = divide (Just $ pointerPivot ptr) range
+    --   in ( need && ans' /= Disjoint
+    --      , turnMarker ans' leftRange (need && ans' /= Disjoint) mark
+    --      , turnMarker ans' rightRange (need && ans' /= Disjoint) mark
+    --      )
+    markLeafFlat mark con = procMarker [] (\_ _ -> N.toList $ contents con) (\fs' _ -> filter (inside (head fs') q . snd) . N.toList $ contents con) q mark
+    -- markLeafFlat (ans, fs', range, True) con = case calcAnswer fs' ans q range of
+    --   Disjoint -> []
+    --   Contained -> N.toList $ contents con
+    --   Overlapping -> filter (inside (head fs') q . snd) . N.toList $ contents con
+    -- markLeafFlat (_, _, _, False) _ = []
 
 -- | pre: list of comparators is not empty
 calcAnswer :: [Comparator v] -> Answer -> Query v -> OpenRange v -> Answer
@@ -269,7 +300,7 @@ cutDisjoint = trim cutNest cutFlat
 
 -- | collects all lists
 collectRanges :: Nest a [(k,v)] -> [(k,v)]
-collectRanges = foldr collect [] . NestU . mapNest Left Right
+collectRanges = foldr' collect [] . NestU . mapNest Left Right
   where
     collect val pts = either (const pts) (++ pts) val
 
