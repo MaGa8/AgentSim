@@ -173,6 +173,14 @@ visitBranch !fDownBranch !fUpBranch !fLeaf wave x !left !right = fUpBranch inter
     (inter, !leftWave, !rightWave) = fDownBranch wave x
     echo sub wave' = visit fDownBranch fUpBranch fLeaf wave' sub
 
+visitr :: (d -> a -> (c -> Maybe d, c -> Maybe d)) -- ^ tell whether to process next branch given current accumulated value
+        -> (c -> d -> a -> c) -- ^ fold accumulated value, vertical value and node value at branch
+        -> (c -> d -> b -> c)  -- ^ fold accumulated value, vertical value and node value at leaf
+        -> c -> d -> BinTree a b -> c
+visitr fdec f g acc v = elimTree (\x l r -> let (fvl, fvr) = fdec v x in f (try x l fvl $ try x r fvr acc) v x) (g acc v)
+  where
+    try x sub fv acc' = maybe acc' (\v' -> visitr fdec f g acc' v' sub) $ fv acc'
+
 -- | turn inner nodes into leaves
 trim :: (a -> Either b a -> Either b a -> Maybe b) -> BinTree a b -> BinTree a b
 trim f = elimTree try Leaf
