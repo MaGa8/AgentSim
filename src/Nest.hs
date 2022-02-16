@@ -10,7 +10,7 @@ module Nest
   , isFlat, isLeaf, toNest, toFlat
   , root, roots, children, nest, trim
   , NestU(..), asNestU, withNestU
-  , mapNest, flood, floodFull, drain, echo, visit, zipNest
+  , mapNest, flood, floodFull, drain, echo, visit, visitr, zipNest
   , prettyPrintNest, labelLevels
   ) where
 
@@ -237,6 +237,20 @@ visit !fDownNestBranch !fDownNestLeaf !fUpBranch !fLeaf iniacc = elimNest (B.vis
     recurse !t wave = visit fDownNestBranch fDownNestLeaf fUpBranch fLeaf wave t
     downFlatBranch wave x = let (y, _, (waveLeft, waveRight)) = fDownNestBranch wave x in (fUpBranch y Nothing, waveLeft, waveRight)
     upFlatBranch !fup left right = fup (left, right)
+
+type Confirm a b = a -> Maybe b
+
+-- | postorder visit that folds over the tree
+visitr :: (d -> a -> (Confirm c d, Confirm c d)) -- ^ choice of subtree to explore
+       -> (d -> a -> Confirm c d) -- ^ choice of nested tree to explore
+       -> (c -> d -> a -> c) -- ^ fold over inner node
+       -> (c -> d -> b -> c) -- ^ fold over flat leaf node
+       -> c -> d -> Nest a b -> c
+visitr fsub fnst gb gl acc v = elimNest (B.visitr fsub gb gl acc v) (B.visitr fnest gnest gnest acc v)
+  where
+    fnest v' = fsub v' . fst
+    gnest acc' v' (x,nst) = gb (try acc' (fnst v' x) nst) v' x
+    try acc' fv t = maybe acc' (\v' -> visitr fsub fnst gb gl acc' v' t) $ fv acc'
 
 mapNest :: (a -> c) -> (b -> d) -> Nest a b -> Nest c d
 mapNest f g = elimNest (Flat . B.mapTree f g) (Nest . B.mapTree mapNestBranch (bimap f (mapNest f g)))
