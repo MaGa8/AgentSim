@@ -241,16 +241,32 @@ visit !fDownNestBranch !fDownNestLeaf !fUpBranch !fLeaf iniacc = elimNest (B.vis
 type Confirm a b = a -> Maybe b
 
 -- | postorder visit that folds over the tree
-visitr :: (d -> a -> (Confirm c d, Confirm c d)) -- ^ choice of subtree to explore
-       -> (d -> a -> Confirm c d) -- ^ choice of nested tree to explore
+visitr :: (d -> a -> (Confirm c d, (Confirm c d, Confirm c d))) -- ^ choice at inner Nest node
+       -> (d -> a -> Confirm c d) -- ^ choice at leaf Nest node
+       -> (d -> a -> (Confirm c d, Confirm c d)) -- ^ choice at inner Flat node
        -> (c -> d -> a -> c) -- ^ fold over inner node
        -> (c -> d -> b -> c) -- ^ fold over flat leaf node
        -> c -> d -> Nest a b -> c
-visitr fsub fnst gb gl acc v = elimNest (B.visitr fsub gb gl acc v) (B.visitr fnest gnest gnest acc v)
+visitr fb fl g hb hl acc v = elimNest (B.visitr g hb hl acc v) (visitrNest fb fl g hb hl acc v)
   where
-    fnest v' = fsub v' . fst
-    gnest acc' v' (x,nst) = gb (try acc' (fnst v' x) nst) v' x
-    try acc' fv t = maybe acc' (\v' -> visitr fsub fnst gb gl acc' v' t) $ fv acc'
+    try acc' fv t = maybe acc' (\v' -> visitr fb fl g hb hl acc' v' t) $ fv acc'
+
+-- mutually recursive helper function of visitr
+-- needed because decision and fold over value cannot be separated (nested tree is part of value)
+visitrNest :: (d -> a -> (Confirm c d, (Confirm c d, Confirm c d))) --  choice at inner Nest node
+           -> (d -> a -> Confirm c d) -- choice at leaf Nest node
+           -> (d -> a -> (Confirm c d, Confirm c d)) -- choice at inner Flat node
+           -> (c -> d -> a -> c) -- fold over inner node
+           -> (c -> d -> b -> c) -- fold over flat leaf node
+           -> c -> d -> NTree a b -> c
+visitrNest fb fl g hb hl acc v = B.elimTree (elimNestNode visitNestBranch) (elimNestNode visitNestLeaf)
+  where
+    visitNestBranch x nst l r = let
+      (nstc, (leftc, rightc)) = fb v x
+      accSub = undefined
+      in hb (try nstc visitr nst . try leftc visitrNest l $ try rightc visitrNest r acc) v x
+    visitNestLeaf x nst = hb (try (fl v x) visitr nst acc) v x
+    try fdec fvis t acc' = maybe acc' (\v' -> fvis fb fl g hb hl acc' v' t) $ fdec acc'
 
 mapNest :: (a -> c) -> (b -> d) -> Nest a b -> Nest c d
 mapNest f g = elimNest (Flat . B.mapTree f g) (Nest . B.mapTree mapNestBranch (bimap f (mapNest f g)))
