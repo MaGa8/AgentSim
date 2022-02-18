@@ -248,8 +248,6 @@ visitr :: (d -> a -> (Confirm c d, (Confirm c d, Confirm c d))) -- ^ choice at i
        -> (c -> d -> b -> c) -- ^ fold over flat leaf node
        -> c -> d -> Nest a b -> c
 visitr fb fl g hb hl acc v = elimNest (B.visitr g hb hl acc v) (visitrNest fb fl g hb hl acc v)
-  where
-    try acc' fv t = maybe acc' (\v' -> visitr fb fl g hb hl acc' v' t) $ fv acc'
 
 -- mutually recursive helper function of visitr
 -- needed because decision and fold over value cannot be separated (nested tree is part of value)

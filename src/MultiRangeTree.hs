@@ -130,7 +130,7 @@ subdivide f size range top bottoms = B.unfoldTree (\(size', range', top', bottom
 
 measureNode :: Size -> OpenRange v -> S.Seq (Inst k v) -> [[Inst k v]] -> Either (Component k v) ()
 measureNode _ _ S.Empty _ = error "node without points was erroneously created while constructing the tree"
-measureNode _ range top@(point S.:<| S.Empty) bottom = Left (instval point, 1, range, top, bottom)
+measureNode _ range top@(point S.:<| S.Empty) bottom = let coord = instval point in Left (instval point, 1, (Just coord, Just coord), top, bottom) -- make point range
 measureNode size _ top bottom = Right ()
 
 -- pre: size >= 2
@@ -139,7 +139,11 @@ measureNode size _ top bottom = Right ()
 halveNode :: Comparator v -> Size -> OpenRange v -> S.Seq (Inst k v) -> [[Inst k v]]
           -> Either (Component k v) (Component k v, (Size, OpenRange v, S.Seq (Inst k v), [[Inst k v]]), (Size, OpenRange v, S.Seq (Inst k v), [[Inst k v]]))
 halveNode f size range top bottom
-  | cmpBySnd f leftmost rightmost == EQ = assert (size >= 2) $ Left (instval leftmost, size, range, top, bottom)
+  -- make point range as all points are equal
+  | cmpBySnd f leftmost rightmost == EQ = let
+      point = instval leftmost
+      pointRange = (Just point, Just point)
+      in assert (size >= 2) $ Left (instval leftmost, size, pointRange, top, bottom) 
   | otherwise = let
       (pivot, (leftSize, topLefts), (rightSize, topRights)) = mkEvenChunks f size top
       comp = (pivot, size, range, top, bottom)
@@ -210,7 +214,38 @@ expandBottom fs (pivot, size, range, top, top' : bottoms) = (Pointer{ pointerSiz
 
 type Query v = (v,v)
 
-query = queryOld
+query = queryVisitr
+
+queryVisitr :: Query v -> MultiRangeTree k v -> [(k,v)]
+queryVisitr q mrt = visitr chooseNestBranch chooseNestLeaf chooseFlatBranch collectBranch collectLeaf [] (False, fs) $ getMultiRangeTree mrt
+  where
+    fs = N.toList $ comparators mrt
+    -- typical problem: cannot tell if we are in a Nest or a Flat -> choice of subtrees depends on this!
+    chooseNestBranch (_, []) _ = error "ran out of comparators"
+    chooseNestBranch (True, _ : fs') _ = (accept fs', (decline, decline))
+    chooseNestBranch (False, f : fs') ptr = case checkQuery f q $ pointerRange ptr of
+      Contained -> (moveOn fs', (decline, decline))
+      Disjoint -> (decline, (decline, decline))
+      Overlapping -> (decline, (moveOn $ f : fs', moveOn $ f : fs'))
+    chooseNestLeaf (_, []) _ = error "ran out of comparators"
+    chooseNestLeaf (True, _ : fs') ptr = moveOn fs'
+    chooseNestLeaf (_, f : fs') ptr = case checkQuery f q (pointerRange ptr) of
+      Contained -> moveOn fs'
+      _ -> decline -- comparison on point range can either be contained or disjoint
+    chooseFlatBranch (_, []) _ = error "ran out of comparators"
+    chooseFlatBranch (True, fs') ptr = (accept fs', accept fs')
+    chooseFlatBranch (False, fs') ptr = case checkQuery (head fs') q (pointerRange ptr) of
+      Contained -> (accept fs', accept fs')
+      Disjoint -> (decline, decline)
+      Overlapping -> (moveOn fs', moveOn fs')
+    collectBranch pts _ _ = pts
+    collectLeaf _ (_, []) con = error "ran out of comparators at leaf"
+    collectLeaf pts (True, _) con = N.toList (contents con) ++ pts
+    collectLeaf pts (False, f : _) con = filter (inside f q . instval) (N.toList $ contents con) ++ pts
+    accept fs' = const $ Just (True, fs')
+    moveOn fs' = const $ Just (False, fs')
+    decline = const Nothing
+
 
 queryFold :: Query v -> MultiRangeTree k v -> [(k,v)]
 queryFold q mrt = collectRanges . cutDisjoint $ markRanges fs q t
