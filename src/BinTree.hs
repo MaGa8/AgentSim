@@ -7,7 +7,7 @@ module BinTree
   , root, children, leaves
   , isLeaf
   , BinTreeU(..), withBinTreeU
-  , drain, flood, floodM, echo, echoM, trim, visit, visitr
+  , drain, flood, floodM, echo, echoM, trim, visit, visitr, visitl'
   ) where
 
 import Data.Bifunctor
@@ -173,6 +173,7 @@ visitBranch !fDownBranch !fUpBranch !fLeaf wave x !left !right = fUpBranch inter
     (inter, !leftWave, !rightWave) = fDownBranch wave x
     echo sub wave' = visit fDownBranch fUpBranch fLeaf wave' sub
 
+-- | Visit the tree in postorder.  Propagate values vertically to subtrees.  Apply fold during visit.
 visitr :: (d -> a -> (c -> Maybe d, c -> Maybe d)) -- ^ tell whether to process next branch given current accumulated value
         -> (c -> d -> a -> c) -- ^ fold accumulated value, vertical value and node value at branch
         -> (c -> d -> b -> c)  -- ^ fold accumulated value, vertical value and node value at leaf
@@ -180,6 +181,15 @@ visitr :: (d -> a -> (c -> Maybe d, c -> Maybe d)) -- ^ tell whether to process 
 visitr fdec f g acc v = elimTree (\x l r -> let (fvl, fvr) = fdec v x in f (try x l fvl $ try x r fvr acc) v x) (g acc v)
   where
     try x sub fv acc' = maybe acc' (\v' -> visitr fdec f g acc' v' sub) $ fv acc'
+
+-- | Visit the tree in preorder.  Propagate values vertically to subtrees.  Apply fold strict in accumulating parameter during visit.
+visitl' :: (d -> a -> (c -> Maybe d, c -> Maybe d)) -- ^ tell whether to process next branch given current accumulated value
+        -> (c -> d -> a -> c) -- ^ fold accumulated value, vertical value and node value at branch
+        -> (c -> d -> b -> c) -- ^ fold accumulated value, vertical value and leaf value
+        -> c -> d -> BinTree a b -> c
+visitl' fdec gb gl acc v = elimTree (\x l r -> let (fvl, fvr) = fdec v x in seq acc . try fvr r . try fvl l $ gb acc v x) (gl acc v)
+  where
+    try fv sub acc' = maybe acc' (\v' -> visitl' fdec gb gl acc' v' sub) $ fv acc'
 
 -- | turn inner nodes into leaves
 trim :: (a -> Either b a -> Either b a -> Maybe b) -> BinTree a b -> BinTree a b
