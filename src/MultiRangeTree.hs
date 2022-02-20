@@ -214,7 +214,40 @@ expandBottom fs (pivot, size, range, top, top' : bottoms) = (Pointer{ pointerSiz
 
 type Query v = (v,v)
 
-query = queryVisitr
+query = queryVisitl'
+
+queryVisitl' :: Query v -> MultiRangeTree k v -> [(k,v)]
+queryVisitl' q mrt = F.toList . visitl' chooseNestBranch chooseNestLeaf chooseFlatBranch collectBranch collectLeaf S.empty (False, fs) $ getMultiRangeTree mrt
+  where
+    fs = N.toList $ comparators mrt
+    -- typical problem: cannot tell if we are in a Nest or a Flat -> choice of subtrees depends on this!
+    chooseNestBranch (_, []) _ = error "ran out of comparators"
+    chooseNestBranch (True, _ : fs') _ = (accept fs', (decline, decline))
+    chooseNestBranch (False, f : fs') ptr = case checkQuery f q $ pointerRange ptr of
+      Contained -> (moveOn fs', (decline, decline))
+      Disjoint -> (decline, (decline, decline))
+      Overlapping -> (decline, (moveOn $ f : fs', moveOn $ f : fs'))
+    chooseNestLeaf (_, []) _ = error "ran out of comparators"
+    chooseNestLeaf (True, _ : fs') ptr = moveOn fs'
+    chooseNestLeaf (_, f : fs') ptr = case checkQuery f q (pointerRange ptr) of
+      Contained -> moveOn fs'
+      _ -> decline -- comparison on point range can either be contained or disjoint
+    chooseFlatBranch (_, []) _ = error "ran out of comparators"
+    chooseFlatBranch (True, fs') ptr = (accept fs', accept fs')
+    chooseFlatBranch (False, fs') ptr = case checkQuery (head fs') q (pointerRange ptr) of
+      Contained -> (accept fs', accept fs')
+      Disjoint -> (decline, decline)
+      Overlapping -> (moveOn fs', moveOn fs')
+    collectBranch pts _ _ = pts
+    collectLeaf _ (_, []) con = error "ran out of comparators at leaf"
+    collectLeaf pts (True, _) con = S.fromList (N.toList $ contents con) >< pts
+    collectLeaf pts (False, f : _) con = let
+      pts'@(head :| _) = contents con
+      in if inside f q $ instval head then S.fromList (N.toList pts') >< pts else pts
+    -- S.fromList (filter (inside f q . instval) . N.toList $ contents con) >< pts
+    accept fs' = const $ Just (True, fs')
+    moveOn fs' = const $ Just (False, fs')
+    decline = const Nothing
 
 queryVisitr :: Query v -> MultiRangeTree k v -> [(k,v)]
 queryVisitr q mrt = visitr chooseNestBranch chooseNestLeaf chooseFlatBranch collectBranch collectLeaf [] (False, fs) $ getMultiRangeTree mrt
@@ -245,7 +278,6 @@ queryVisitr q mrt = visitr chooseNestBranch chooseNestLeaf chooseFlatBranch coll
     accept fs' = const $ Just (True, fs')
     moveOn fs' = const $ Just (False, fs')
     decline = const Nothing
-
 
 queryFold :: Query v -> MultiRangeTree k v -> [(k,v)]
 queryFold q mrt = collectRanges . cutDisjoint $ markRanges fs q t
